@@ -264,7 +264,7 @@ class Node:
 
             for chunk in range(num_chunks):
                 self.download_chunk(ip, int(port), filename, chunk)
-
+        self.merge_chunks(filename, num_chunks)
     def download_chunk(self, ip, port, filename, chunk):
         """Yêu cầu tải một phần file từ peer."""
         try:
@@ -284,7 +284,7 @@ class Node:
 
     def merge_chunks(self, filename, num_chunks):
         """Ghép các chunk thành file hoàn chỉnh"""
-        output_path = os.path.join(self.chunk_dir, filename)
+        output_path = os.path.join(self.donwload_dir, filename)
         with open(output_path, "wb") as output_file:
             for chunk_number in range(num_chunks):
                 chunk_path = os.path.join(self.chunk_dir, f"{filename}_part{chunk_number}")
@@ -296,6 +296,7 @@ class Node:
                     print(f"[ERROR] Thiếu chunk {chunk_number}, không thể ghép file {filename}")
                     return
         print(f"[MERGE] Đã hoàn tất file {filename} tại {output_path}")
+   
     def stop(self):
         """Dừng node"""
         response = self.send_request(f"LEAVE {filename}")
