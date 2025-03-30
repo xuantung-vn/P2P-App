@@ -5,8 +5,8 @@ import time
 import os
 
 # File lưu thông tin nodes và file chia sẻ
-PEERS_FILE = "peers.json"
-FILE_DATABASE = "file_registry.json"
+PEERS_FILE = "tracker/peers.json"
+FILE_DATABASE = "tracker/file_registry.json"
 
 # Đọc dữ liệu từ file JSON (nếu có)
 def load_json(file_path):
@@ -47,27 +47,23 @@ def handle_client(client_socket, addr):
             command = data.split(" ")  # Nếu lỗi -> xử lý theo dạng chuỗi thường
 
         if isinstance(command, dict):  # Xử lý JSON command
-            if command["action"] == "GET_FILE_SOURCES":
-                filename = command["filename"]
-                sources = file_registry.get(filename, [])
-                response = json.dumps({"sources": sources})  
-                print(f"[DEBUG] Trả về nguồn file: {response}")
-                client_socket.send(response.encode())
-
-            elif command["action"] == "FILE_AVAILABLE":
+            if command["action"] == "FILE_AVAILABLE":
                 peer_id = command["node"]
                 filename = command["filename"]
+                host = command["host"]
+                port = command["port"]
                 num_chunks = command["chunks"]
 
                 if filename not in file_registry or not isinstance(file_registry[filename], list):
                     print(f"[WARNING] file_registry[{filename}] không hợp lệ, khởi tạo lại danh sách.")
                     file_registry[filename] = []
 
-                file_registry[filename].append({"peer": peer_id, "chunks": num_chunks})
+                file_registry[filename].append({"peer": peer_id, "host": host, "port": port, "chunks": num_chunks})
                 save_json(FILE_DATABASE, file_registry)
 
                 print(f"[DEBUG] file_registry sau cập nhật: {json.dumps(file_registry, indent=4)}")
                 client_socket.send(json.dumps({"status": "FILE_UPDATED", "filename": filename}).encode())
+
 
         elif isinstance(command, list):  # Xử lý text-based command
             if command[0] == "REGISTER":
@@ -88,7 +84,12 @@ def handle_client(client_socket, addr):
                 active_peers = [peer for peer, info in peers.items() if info["status"] == "connected"]
                 peers_list = ",".join(active_peers) if active_peers else "NO_PEERS"
                 client_socket.send(f"PEERS {peers_list}".encode())
-
+            if command[0] == "GET_FILE_SOURCES":
+                filename = command[1]
+                sources = file_registry.get(filename, [])
+                response = json.dumps({"sources": sources})  
+                print(f"[DEBUG] Trả về nguồn file: {response}")
+                client_socket.send(response.encode())
         else:
             print(f"[ERROR] Không xác định được loại lệnh: {command}")
 
