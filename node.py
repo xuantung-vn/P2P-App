@@ -13,6 +13,12 @@ CHUNK_SIZE = 512 * 1024     # 512KB
 CHUNK_DIR = "chunks"       # Thư mục lưu các chunk
 NODE_DIR = "nodes"
 
+DOWNLOAD_FOLDER = "downloads"
+
+# Tạo thư mục lưu file nếu chưa có
+if not os.path.exists(DOWNLOAD_FOLDER):
+    os.makedirs(DOWNLOAD_FOLDER)
+
 class Node:
     def __init__(self, host="0.0.0.0", port=5000):
         self.host = host
@@ -132,7 +138,7 @@ class Node:
     def find_available_port(self, port=5000):
         """Tìm cổng trống"""
         while not self.is_port_available(port):
-            port = random.randint(5000, 9000)
+            port = random.randint(5000, 5010)
         return port
 
     def is_port_available(self, port):
@@ -174,6 +180,7 @@ class Node:
                 s.send(message.encode())
                 response = s.recv(1024).decode()
                 print("[TRACKER] Response:", response)
+
         except Exception as e:
             print(f"[ERROR] Không thể thông báo tracker: {e}")
     def notify_peers(self, filename, num_chunks):
@@ -200,7 +207,76 @@ class Node:
                     break
                 f.write(data)
         print(f"[RECEIVED] Đã lưu {filename} chunk {chunk_number} tại {self.node_dir}")
-    
+        
+    def send_request(self, command):
+        """Gửi lệnh đến tracker và nhận phản hồi."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.connect((self.tracker_host, self.tracker_port))
+                client.send(command.encode())
+                response = client.recv(4096).decode()
+                print(f"[DEBUG] Phản hồi từ tracker: {response}")  # Thêm debug
+                return response
+        except Exception as e:
+            print(f"[ERROR] Không thể gửi yêu cầu '{command}': {e}")
+            return None
+    def download_file(self, filename):
+        """Tải file từ các peer có sẵn."""
+        response = self.send_request(f"GET_FILE_SOURCES {filename}")
+
+        if response is None:
+            print(f"[ERROR] Không nhận được phản hồi từ tracker khi yêu cầu {filename}")
+            return
+
+        try:
+            data = json.loads(response)
+            sources = data.get("sources", [])
+        except json.JSONDecodeError:
+            print(f"[ERROR] Phản hồi từ tracker không phải là JSON hợp lệ: {response}")
+            return
+
+        if not sources:
+            print(f"[INFO] Không tìm thấy nguồn tải cho file {filename}")
+            return
+
+        for source in sources:
+            peer, num_chunks = source["peer"], source["chunks"]
+            ip, port = peer.split(":")
+            print(f"[INFO] Đang tải {filename} từ {peer}")
+
+            for chunk in range(num_chunks):
+                self.download_chunk(ip, int(port), filename, chunk)
+    def download_chunk(self, ip, port, filename, chunk):
+        """Yêu cầu tải một phần file từ peer."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.connect((ip, port))
+                client.send(f"DOWNLOAD {filename} {chunk}".encode())
+
+                with open(f"{self.node_dir}/{filename}_part{chunk}", "wb") as f:
+                    while True:
+                        data = client.recv(1024)
+                        if not data:
+                            break
+                        f.write(data)
+            print(f"[INFO] Đã tải xong phần {chunk} của {filename}")
+        except Exception as e:
+            print(f"[ERROR] Lỗi tải {filename} phần {chunk}: {e}")
+
+    def merge_chunks(self, filename, num_chunks):
+        """Ghép các chunk thành file hoàn chỉnh"""
+        output_path = os.path.join(self.node_dir, filename)
+        with open(output_path, "wb") as output_file:
+            for chunk_number in range(num_chunks):
+                chunk_path = os.path.join(self.node_dir, f"{filename}_part{chunk_number}")
+                if os.path.exists(chunk_path):
+                    with open(chunk_path, "rb") as chunk_file:
+                        output_file.write(chunk_file.read())
+                    os.remove(chunk_path)  # Xóa chunk sau khi ghép thành công
+                else:
+                    print(f"[ERROR] Thiếu chunk {chunk_number}, không thể ghép file {filename}")
+                    return
+        print(f"[MERGE] Đã hoàn tất file {filename} tại {output_path}")
     def stop(self):
         """Dừng node"""
         self.running = False
@@ -213,10 +289,10 @@ if __name__ == "__main__":
         cmd = input("\n[COMMAND] list, upload <file>, exit: ").strip()
         if cmd == "list":
             node.get_peers_from_tracker()
-        elif cmd.startswith("upload "):
+        elif cmd.startswith("u "):
             parts = cmd.split(" ")
             node.upload_file(parts[1])
-        elif cmd.startswith("send "):
+        elif cmd.startswith("s "):
             parts = cmd.split(" ")
             if len(parts) < 4:
                 print("[ERROR] Cú pháp: send <peer_host> <peer_port> <message>")
@@ -225,7 +301,10 @@ if __name__ == "__main__":
                 peer_port = parts[2]
                 message = " ".join(parts[3:])
                 node.send_message(peer_host, peer_port, message)
-
+        elif cmd.startswith("d "):
+            parts = cmd.split(" ")
+            filename = parts[1]
+            node.download_file(filename)
         elif cmd == "exit":
             print("[NODE] Đang thoát...")
             node.stop()

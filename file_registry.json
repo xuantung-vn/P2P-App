@@ -1,0 +1,14 @@
+{
+    "a.jpg": [
+        {
+            "peer": "7b4e9fae",
+            "chunks": 1
+        }
+    ],
+    "test.mp4": [
+        {
+            "peer": "7b4e9fae",
+            "chunks": 14
+        }
+    ]
+}
