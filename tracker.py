@@ -1,39 +1,40 @@
 import socket
 import threading
-import json
 
+# Danh sách các nodes
 peers = {}
 
-def handle_client(conn, addr):
+def handle_client(client_socket, addr):
     global peers
-    print(f"[+] Peer {addr} connected.")
+    try:
+        data = client_socket.recv(1024).decode().strip()
+        if not data:
+            return
 
-    while True:
-        try:
-            data = conn.recv(1024).decode()
-            if not data:
-                break
-            request = json.loads(data)
+        command = data.split(" ")
 
-            if request["action"] == "register":
-                peer_ip = addr[0]
-                peer_port = request["port"]
-                file_list = request["files"]
-                peers[(peer_ip, peer_port)] = file_list
-                conn.send(json.dumps({"status": "registered"}).encode())
+        if command[0] == "REGISTER":
+            ip, port = command[1], command[2]
+            peer_id = f"{ip}:{port}"
+            peers[peer_id] = True
+            client_socket.send(f"REGISTERED {peer_id}".encode())
 
-            elif request["action"] == "find":
-                filename = request["filename"]
-                available_peers = [
-                    (ip, port) for (ip, port), files in peers.items() if filename in files
-                ]
-                conn.send(json.dumps({"peers": available_peers}).encode())
+        elif command[0] == "GET_PEERS":
+            peers_list = ",".join(peers.keys())
+            client_socket.send(f"PEERS {peers_list}".encode())
 
-        except:
-            break
+        elif command[0] == "LEAVE":
+            ip, port = command[1], command[2]
+            peer_id = f"{ip}:{port}"
+            if peer_id in peers:
+                del peers[peer_id]
+            client_socket.send("LEFT".encode())
 
-    print(f"[-] Peer {addr} disconnected.")
-    conn.close()
+    except Exception as e:
+        print(f"[ERROR] {e}")
+
+    finally:
+        client_socket.close()
 
 def start_tracker():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -42,7 +43,8 @@ def start_tracker():
     print("[TRACKER] Server is running on port 5000...")
 
     while True:
-        conn, addr = server.accept()
-        threading.Thread(target=handle_client, args=(conn, addr)).start()
+        client_sock, addr = server.accept()
+        threading.Thread(target=handle_client, args=(client_sock, addr)).start()
 
-start_tracker()
+if __name__ == "__main__":
+    start_tracker()

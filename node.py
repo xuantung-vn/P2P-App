@@ -3,6 +3,9 @@ import threading
 import hashlib
 import random
 
+TRACKER_HOST = "127.0.0.1"
+TRACKER_PORT = 6000
+
 class Node:
     def __init__(self, host, port):
         self.host = host
@@ -72,7 +75,21 @@ class Node:
             conn.sendall(message.encode())
         except Exception as e:
             print(f"[ERROR] {e}")
+    def register_with_tracker(self):
+        """Gửi thông tin node đến tracker"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((TRACKER_HOST, TRACKER_PORT))
+            s.send(f"REGISTER {self.host} {self.port}".encode())
+            response = s.recv(1024).decode()
+            print("[TRACKER] Response:", response)
 
+    def get_peers_from_tracker(self):
+        """Lấy danh sách các nodes từ tracker"""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((TRACKER_HOST, TRACKER_PORT))
+            s.send("GET_PEERS".encode())
+            response = s.recv(1024).decode()
+            print("[TRACKER] Danh sách nodes:", response)
     def stop(self):
         """Dừng node"""
         self.running = False
@@ -80,4 +97,29 @@ class Node:
         print("[NODE] Shutting down")
 
 if __name__ == "__main__":
-    node = Node("127.0.0.1", 5001)  # Chạy node trên cổng 5001
+    node = Node("127.0.0.1", 5002)
+    node.register_with_tracker()
+    node.get_peers_from_tracker()
+    # Chạy server để nhận file
+    while True:
+        cmd = input("\n[COMMAND] Nhập lệnh (list, send <file>, exit): ").strip()
+        
+        if cmd == "list":
+            node.send_message()
+        
+        elif cmd.startswith("send "):
+            parts = cmd.split(" ")
+            if len(parts) < 3:
+                print("[ERROR] Cú pháp: send <peer_host> <peer_port> <file_name>")
+            else:
+                peer_host = parts[1]
+                peer_port = parts[2]
+                file_name = " ".join(parts[3:])
+                node.send_file(peer_host, peer_port, file_name)
+
+        elif cmd == "exit":
+            print("[NODE] Đang thoát...")
+            break
+
+        else:
+            print("[ERROR] Lệnh không hợp lệ!")
