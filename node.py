@@ -45,7 +45,7 @@ class Node:
         self.register_with_tracker()
 
         # Lấy danh sách nodes từ tracker
-        self.get_peers_from_tracker()
+        # self.get_peers_from_tracker()
 
         # Bắt đầu luồng lắng nghe kết nối
         threading.Thread(target=self.listen_for_peers, daemon=True).start()
@@ -69,21 +69,37 @@ class Node:
     def handle_peer(self, conn, addr):
         """Xử lý khi một node khác kết nối"""
         print(f"[NODE] Connected to {addr}")
-        self.peers.add(addr)
-        while True:
-            try:
-                data = conn.recv(1024).decode()
+        
+        try:
+            while True:
+                data = conn.recv(1024).decode().strip()
                 if not data:
                     break
-                if data.startswith("UPLOAD"):
-                    _, filename, chunk_number = data.split()
-                    self.receive_chunk(conn, filename, int(chunk_number))
                 print(f"[MESSAGE FROM {addr}] {data}")
-            except:
-                break
-        conn.close()
-        self.peers.remove(addr)
-        print(f"[NODE] Disconnected from {addr}")
+                command = data.split(" ")
+
+                if command[0] == "DOWNLOAD":
+                    filename, chunk = command[1], command[2]
+                    file_path = os.path.join(f"{self.chunkdir}", f"{filename}_part{chunk}")
+                    try:
+                        with open(file_path, "rb") as f:
+                            while True:
+                                chunk_data = f.read(1024)
+                                if not chunk_data:
+                                    break
+                                conn.sendall(chunk_data)
+                        
+                        # Gửi tín hiệu EOF để thông báo kết thúc
+                        conn.sendall(b"EOF")
+                        print(f"[INFO] Đã gửi phần {chunk} của {filename} tới {addr}")
+                    except FileNotFoundError:
+                        print(f"[ERROR] Không tìm thấy phần {chunk} của {filename}")
+                        conn.sendall(b"ERROR: File not found")
+        except Exception as e:
+            print(f"[ERROR] {e}")
+        finally:
+            conn.close()
+            print(f"[NODE] Disconnected from {addr}")
 
     def connect_to_peer(self, peer_host, peer_port):
         """Kết nối với một node khác"""
@@ -94,7 +110,7 @@ class Node:
             print(f"[NODE] Connected to {peer_host}:{peer_port}")
             return conn
         except Exception as e:
-            print(f"[ERROR] Could not connect to peer {peer_host}:{peer_port} - {e}")
+            # print(f"[ERROR] Could not connect to peer {peer_host}:{peer_port} - {e}")
             return None
 
     def send_message(self, peer_host, peer_port, message):
@@ -248,6 +264,7 @@ class Node:
 
             for chunk in range(num_chunks):
                 self.download_chunk(ip, int(port), filename, chunk)
+
     def download_chunk(self, ip, port, filename, chunk):
         """Yêu cầu tải một phần file từ peer."""
         try:
@@ -281,6 +298,7 @@ class Node:
         print(f"[MERGE] Đã hoàn tất file {filename} tại {output_path}")
     def stop(self):
         """Dừng node"""
+        response = self.send_request(f"LEAVE {filename}")
         self.running = False
         self.server.close()
         print("[NODE] Shutting down")

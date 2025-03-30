@@ -88,7 +88,7 @@ def handle_client(client_socket, addr):
                 filename = command[1]
                 sources = file_registry.get(filename, [])
                 response = json.dumps({"sources": sources})  
-                print(f"[DEBUG] Trả về nguồn file: {response}")
+                # print(f"[DEBUG] Trả về nguồn file: {response}")
                 client_socket.send(response.encode())
         else:
             print(f"[ERROR] Không xác định được loại lệnh: {command}")
