@@ -3,9 +3,15 @@ import threading
 import hashlib
 import random
 import time
+import json
+import os
 
-TRACKER_HOST = "127.0.0.1"
-TRACKER_PORT = 6000
+TRACKER_HOST = "127.0.0.1"  # IP của tracker
+TRACKER_PORT = 6000         # Cổng của tracker
+NODE_PORT = 7000            # Cổng lắng nghe của node
+CHUNK_SIZE = 512 * 1024     # 512KB
+CHUNK_DIR = "chunks"       # Thư mục lưu các chunk
+NODE_DIR = "nodes"
 
 class Node:
     def __init__(self, host="0.0.0.0", port=5000):
@@ -14,6 +20,11 @@ class Node:
         self.id = self.generate_id()
         self.peers = set()
         self.running = True
+        
+        # Tạo thư mục riêng cho node
+        self.node_dir = os.path.join(NODE_DIR, self.id)
+        if not os.path.exists(self.node_dir):
+            os.makedirs(self.node_dir)
 
         # Tạo socket server
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -33,11 +44,11 @@ class Node:
         threading.Thread(target=self.listen_for_peers, daemon=True).start()
     
     def generate_id(self):
-        """Tạo ID duy nhất cho node"""
+        """Tạo ID ngắn gọn cho node"""
         hash_obj = hashlib.sha256()
         random_data = f"{self.host}{self.port}{random.randint(1, 99999999)}"
         hash_obj.update(random_data.encode('utf-8'))
-        return hash_obj.hexdigest()
+        return hash_obj.hexdigest()[:8]  # Lấy 8 ký tự đầu của SHA-256
     
     def listen_for_peers(self):
         """Lắng nghe kết nối từ các node khác"""
@@ -57,6 +68,9 @@ class Node:
                 data = conn.recv(1024).decode()
                 if not data:
                     break
+                if data.startswith("UPLOAD"):
+                    _, filename, chunk_number = data.split()
+                    self.receive_chunk(conn, filename, int(chunk_number))
                 print(f"[MESSAGE FROM {addr}] {data}")
             except:
                 break
@@ -98,14 +112,13 @@ class Node:
             print(f"[ERROR] Could not register with tracker: {e}")
 
     def get_peers_from_tracker(self):
-        """Lấy danh sách các nodes từ tracker và tự động kết nối"""
+        """Lấy danh sách các nodes từ tracker"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((TRACKER_HOST, TRACKER_PORT))
                 s.send("GET_PEERS".encode())
                 response = s.recv(1024).decode()
                 print("[TRACKER] Danh sách nodes:", response)
-
                 if response.startswith("PEERS "):
                     peers_list = response[6:].split(",")
                     for peer in peers_list:
@@ -115,21 +128,79 @@ class Node:
                                 self.connect_to_peer(peer_host, peer_port)
         except Exception as e:
             print(f"[ERROR] Could not get peers from tracker: {e}")
-            
+    
     def find_available_port(self, port=5000):
-        """Kiểm tra nếu port đã sử dụng, nếu có thì chọn port mới"""
-        if port is None:
-            port = random.randint(5000, 9000)  # Chọn cổng ngẫu nhiên ban đầu
-
-        while not self.is_port_available(port):  # Nếu port đã dùng, tìm port khác
+        """Tìm cổng trống"""
+        while not self.is_port_available(port):
             port = random.randint(5000, 9000)
         return port
 
     def is_port_available(self, port):
-        """Kiểm tra xem cổng có đang được sử dụng không"""
+        """Kiểm tra cổng có trống không"""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            return s.connect_ex((self.host, port)) != 0  # Trả về True nếu cổng chưa bị chiếm
+            return s.connect_ex((self.host, port)) != 0
+    def upload_file(self, filename):
+        """Lưu file thành các chunk và thông báo tracker"""
+        if not os.path.exists(filename):
+            print(f"[ERROR] File {filename} không tồn tại.")
+            return
+        
+        file_basename = os.path.basename(filename)  # Lấy tên file, bỏ đường dẫn
+        chunks = []
+        with open(filename, "rb") as f:
+            chunk_number = 0
+            while True:
+                chunk = f.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                chunk_filename = f"{file_basename}.chunk{chunk_number}"  # Tạo tên file chunk
+                chunk_path = os.path.join(self.node_dir, chunk_filename)  # Lưu vào thư mục của node
+                with open(chunk_path, "wb") as chunk_file:
+                    chunk_file.write(chunk)
+                chunks.append(chunk_filename)
+                print(f"[UPLOAD] Đã lưu chunk {chunk_number} tại {chunk_path}")
+                chunk_number += 1
+        
+        # Thông báo tracker rằng node này giữ file
+        self.notify_tracker(file_basename, chunk_number)
+        self.notify_peers(file_basename, chunk_number)
+        
+    def notify_tracker(self, filename, num_chunks):
+        """Thông báo tracker rằng node đang giữ file"""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.connect((TRACKER_HOST, TRACKER_PORT))
+                message = json.dumps({"action": "FILE_AVAILABLE", "node": self.id, "filename": filename, "chunks": num_chunks})
+                s.send(message.encode())
+                response = s.recv(1024).decode()
+                print("[TRACKER] Response:", response)
+        except Exception as e:
+            print(f"[ERROR] Không thể thông báo tracker: {e}")
+    def notify_peers(self, filename, num_chunks):
+        """Gửi thông báo cho các peer rằng file đã được tải lên"""
+        for peer in self.peers:
+            try:
+                peer_host, peer_port = peer  # Lấy host và port từ tuple
+                peer_port = int(peer_port)  # Chuyển port thành số nguyên
 
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.connect((peer_host, peer_port))
+                    message = f"NEW_FILE {filename} {num_chunks}"
+                    s.send(message.encode())
+                    print(f"[PEER] Đã thông báo {peer} về file {filename}")
+            except Exception as e:
+                print(f"[ERROR] Không thể thông báo {peer}: {e}")
+    def receive_chunk(self, conn, filename, chunk_number):
+        """Nhận và lưu chunk vào thư mục riêng của node"""
+        chunk_path = os.path.join(self.node_dir, f"{filename}.chunk{chunk_number}")
+        with open(chunk_path, "wb") as f:
+            while True:
+                data = conn.recv(CHUNK_SIZE)
+                if not data:
+                    break
+                f.write(data)
+        print(f"[RECEIVED] Đã lưu {filename} chunk {chunk_number} tại {self.node_dir}")
+    
     def stop(self):
         """Dừng node"""
         self.running = False
@@ -138,13 +209,13 @@ class Node:
 
 if __name__ == "__main__":
     node = Node()
-    # Chạy server để nhận file
     while True:
-        cmd = input("\n[COMMAND] Nhập lệnh (list, send <host> <port> <message>, exit): ").strip()
-        
+        cmd = input("\n[COMMAND] list, upload <file>, exit: ").strip()
         if cmd == "list":
             node.get_peers_from_tracker()
-        
+        elif cmd.startswith("upload "):
+            parts = cmd.split(" ")
+            node.upload_file(parts[1])
         elif cmd.startswith("send "):
             parts = cmd.split(" ")
             if len(parts) < 4:
@@ -157,7 +228,7 @@ if __name__ == "__main__":
 
         elif cmd == "exit":
             print("[NODE] Đang thoát...")
+            node.stop()
             break
-
         else:
             print("[ERROR] Lệnh không hợp lệ!")
