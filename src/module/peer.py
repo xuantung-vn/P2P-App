@@ -2,18 +2,9 @@ import socket
 import threading
 import hashlib
 import random
-import time
+import config
 import json
 import os
-
-TRACKER_HOST = "127.0.0.1"  # IP của tracker
-TRACKER_PORT = 6000         # Cổng của tracker
-NODE_PORT = 7000            # Cổng lắng nghe của node
-CHUNK_SIZE = 512 * 1024     # 512KB
-CHUNK_DIR = "chunks"       # Thư mục lưu các chunk
-NODE_DIR = "nodes"
-
-DOWNLOAD_FOLDER = "downloads"
 
 
 class Node:
@@ -25,13 +16,13 @@ class Node:
         self.running = True
         
         # Tạo thư mục riêng cho node
-        self.node_dir = os.path.join(NODE_DIR, self.id)
-        self.chunk_dir = f"{self.node_dir}/{CHUNK_DIR}"
-        self.donwload_dir = f"{self.node_dir}/{DOWNLOAD_FOLDER}"
-        if not os.path.exists(self.node_dir):
-            os.makedirs(self.node_dir)
+        self.config.NODE_DIR = os.path.join(config.NODE_DIR, self.id)
+        self.config.CHUNK_DIR = f"{self.config.NODE_DIR}/{config.CHUNK_DIR}"
+        self.donwload_dir = f"{self.config.NODE_DIR}/{config.DOWNLOAD_FOLDER}"
+        if not os.path.exists(self.config.NODE_DIR):
+            os.makedirs(self.config.NODE_DIR)
             os.makedirs(self.donwload_dir)
-            os.makedirs(self.chunk_dir)
+            os.makedirs(self.config.CHUNK_DIR)
 
         # Tạo socket server
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -123,7 +114,7 @@ class Node:
         """Gửi thông tin node đến tracker"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((TRACKER_HOST, TRACKER_PORT))
+                s.connect((config.TRACKER_HOST, config.TRACKER_PORT))
                 s.send(f"REGISTER {self.host} {self.port}".encode())
                 response = s.recv(1024).decode()
                 print("[TRACKER] Response:", response)
@@ -134,7 +125,7 @@ class Node:
         """Lấy danh sách các nodes từ tracker"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((TRACKER_HOST, TRACKER_PORT))
+                s.connect((config.TRACKER_HOST, config.TRACKER_PORT))
                 s.send("GET_PEERS".encode())
                 response = s.recv(1024).decode()
                 print("[TRACKER] Danh sách nodes:", response)
@@ -169,11 +160,11 @@ class Node:
         with open(filename, "rb") as f:
             chunk_number = 0
             while True:
-                chunk = f.read(CHUNK_SIZE)
+                chunk = f.read(config.CHUNK_SIZE)
                 if not chunk:
                     break
                 chunk_filename = f"{file_basename}.chunk{chunk_number}"  # Tạo tên file chunk
-                chunk_path = os.path.join(self.chunk_dir, chunk_filename)  # Lưu vào thư mục của node
+                chunk_path = os.path.join(self.config.CHUNK_DIR, chunk_filename)  # Lưu vào thư mục của node
                 with open(chunk_path, "wb") as chunk_file:
                     chunk_file.write(chunk)
                 chunks.append(chunk_filename)
@@ -188,7 +179,7 @@ class Node:
         """Thông báo tracker rằng node đang giữ file"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((TRACKER_HOST, TRACKER_PORT))
+                s.connect((config.TRACKER_HOST, config.TRACKER_PORT))
                 message = json.dumps({"action": "FILE_AVAILABLE", "node": self.id, "filename": filename, "chunks": num_chunks, "host":self.host, "port": self.port})
                 s.send(message.encode())
                 response = s.recv(1024).decode()
@@ -212,20 +203,20 @@ class Node:
                 print(f"[ERROR] Không thể thông báo {peer}: {e}")
     def receive_chunk(self, conn, filename, chunk_number):
         """Nhận và lưu chunk vào thư mục riêng của node"""
-        chunk_path = os.path.join(self.chunk_dir, f"{filename}.chunk{chunk_number}")
+        chunk_path = os.path.join(self.config.CHUNK_DIR, f"{filename}.chunk{chunk_number}")
         with open(chunk_path, "wb") as f:
             while True:
-                data = conn.recv(CHUNK_SIZE)
+                data = conn.recv(config.CHUNK_SIZE)
                 if not data:
                     break
                 f.write(data)
-        print(f"[RECEIVED] Đã lưu {filename} chunk {chunk_number} tại {self.chunk_dir}")
+        print(f"[RECEIVED] Đã lưu {filename} chunk {chunk_number} tại {self.config.CHUNK_DIR}")
         
     def send_request(self, command):
         """Gửi lệnh đến tracker và nhận phản hồi."""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                client.connect((TRACKER_HOST, TRACKER_PORT))
+                client.connect((config.TRACKER_HOST, config.TRACKER_PORT))
                 client.send(command.encode())
                 response = client.recv(4096).decode()
                 print(f"[DEBUG] Phản hồi từ tracker: {response}")  # Thêm debug
@@ -268,7 +259,7 @@ class Node:
                 client.connect((ip, port))
                 client.send(f"DOWNLOAD {filename} {chunk}".encode())
 
-                with open(f"{self.chunk_dir}/{filename}_part{chunk}", "wb") as f:
+                with open(f"{self.config.CHUNK_DIR}/{filename}_part{chunk}", "wb") as f:
                     while True:
                         data = client.recv(1024)
                         if not data:
@@ -283,7 +274,7 @@ class Node:
         output_path = os.path.join(self.donwload_dir, filename)
         with open(output_path, "wb") as output_file:
             for chunk_number in range(num_chunks):
-                chunk_path = os.path.join(self.chunk_dir, f"{filename}_part{chunk_number}")
+                chunk_path = os.path.join(self.config.CHUNK_DIR, f"{filename}_part{chunk_number}")
                 if os.path.exists(chunk_path):
                     with open(chunk_path, "rb") as chunk_file:
                         output_file.write(chunk_file.read())

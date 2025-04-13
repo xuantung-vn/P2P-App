@@ -1,10 +1,9 @@
-import tkinter as tk
-from tkinter import scrolledtext
-import threading
 import socket
-import time
+import threading
 import json
+import time
 import os
+import config
 
 # File lưu thông tin nodes và file chia sẻ
 PEERS_FILE = "tracker/peers.json"
@@ -20,6 +19,7 @@ def load_json(file_path):
         pass
     return {}
 
+
 # Lưu dữ liệu vào file JSON
 def save_json(file_path, data):
     try:
@@ -32,12 +32,11 @@ def save_json(file_path, data):
 peers = load_json(PEERS_FILE)
 file_registry = load_json(FILE_DATABASE)
 
-def handle_client(client_socket, addr, log_widget):
+def handle_client(client_socket, addr):
     global peers, file_registry
     try:
         data = client_socket.recv(1024).decode().strip()
-        log_widget.insert(tk.END, f"[DEBUG] {addr}: {data}\n")  # Log nhận lệnh
-        log_widget.yview(tk.END)  # Cuộn đến cuối
+        print(f"[DEBUG] {addr}: {data}")  # Log nhận lệnh
 
         if not data:
             return
@@ -57,24 +56,22 @@ def handle_client(client_socket, addr, log_widget):
                 num_chunks = command["chunks"]
 
                 if filename not in file_registry or not isinstance(file_registry[filename], list):
-                    log_widget.insert(tk.END, f"[WARNING] file_registry[{filename}] không hợp lệ, khởi tạo lại danh sách.\n")
+                    print(f"[WARNING] file_registry[{filename}] không hợp lệ, khởi tạo lại danh sách.")
                     file_registry[filename] = []
 
                 file_registry[filename].append({"peer": peer_id, "host": host, "port": port, "chunks": num_chunks})
                 save_json(FILE_DATABASE, file_registry)
 
-                log_widget.insert(tk.END, f"[DEBUG] file_registry sau cập nhật: {json.dumps(file_registry, indent=4)}\n")
-                log_widget.yview(tk.END)
+                print(f"[DEBUG] file_registry sau cập nhật: {json.dumps(file_registry, indent=4)}")
                 client_socket.send(json.dumps({"status": "FILE_UPDATED", "filename": filename}).encode())
 
-        elif isinstance(command, list):  # Xử lý text-based command
+
+        elif isinstance(command, list):
             if command[0] == "REGISTER":
                 ip, port = command[1], command[2]
                 peer_id = f"{ip}:{port}"
                 peers[peer_id] = {"ip": ip, "port": port, "status": "connected", "last_seen": time.time()}
                 save_json(PEERS_FILE, peers)
-                log_widget.insert(tk.END, f"[INFO] REGISTERED {peer_id}\n")
-                log_widget.yview(tk.END)
                 client_socket.send(f"REGISTERED {peer_id}".encode())
             elif command[0] == "LEAVE":
                 ip, port = command[1], command[2]
@@ -83,8 +80,6 @@ def handle_client(client_socket, addr, log_widget):
                     peers[peer_id]["status"] = "disconnected"
                     peers[peer_id]["last_seen"] = time.time()
                     save_json(PEERS_FILE, peers)
-                log_widget.insert(tk.END, f"[INFO] LEFT {peer_id}\n")
-                log_widget.yview(tk.END)
                 client_socket.send("LEFT".encode())
             elif command[0] == "GET_PEERS":
                 active_peers = [peer for peer, info in peers.items() if info["status"] == "connected"]
@@ -96,47 +91,23 @@ def handle_client(client_socket, addr, log_widget):
                 response = json.dumps({"sources": sources})  
                 client_socket.send(response.encode())
         else:
-            log_widget.insert(tk.END, f"[ERROR] Không xác định được loại lệnh: {command}\n")
-            log_widget.yview(tk.END)
+            print(f"[ERROR] Không xác định được loại lệnh: {command}")
 
     except Exception as e:
-        log_widget.insert(tk.END, f"[ERROR] {e}\n")
-        log_widget.yview(tk.END)
+        print(f"[ERROR] {e}")
 
     finally:
         client_socket.close()
 
-def start_tracker(log_widget):
+def start_tracker():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind(("0.0.0.0", 6000))
     server.listen(5)
-    log_widget.insert(tk.END, "[TRACKER] Server is running on port 6000...\n")
-    log_widget.yview(tk.END)
+    print("[TRACKER] Server is running on port 6000...")
 
     while True:
         client_sock, addr = server.accept()
-        threading.Thread(target=handle_client, args=(client_sock, addr, log_widget)).start()
-
-# GUI chính
-class TrackerGUI:
-    def __init__(self, root):
-        self.root = root
-        root.title("Tracker UI")
-        root.geometry("800x600")
-
-        # Hiển thị log
-        self.log_text = scrolledtext.ScrolledText(root, width=100, height=30, wrap=tk.WORD)
-        self.log_text.pack(pady=10)
-
-        # Nút bắt đầu tracker
-        self.start_button = tk.Button(root, text="Start Tracker", command=self.start_tracker)
-        self.start_button.pack(pady=10)
-
-    def start_tracker(self):
-        self.start_button.config(state=tk.DISABLED)  # Vô hiệu hóa nút sau khi nhấn
-        threading.Thread(target=start_tracker, args=(self.log_text,), daemon=True).start()
+        threading.Thread(target=handle_client, args=(client_sock, addr)).start()
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = TrackerGUI(root)
-    root.mainloop()
+    start_tracker()
