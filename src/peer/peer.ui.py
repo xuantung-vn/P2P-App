@@ -1,5 +1,6 @@
 import hashlib
 import os
+import queue
 import random
 import threading
 import time
@@ -8,33 +9,6 @@ from tkinter import ttk, messagebox, filedialog
 import socket
 import json
 
-def load_env(filepath=".env"):
-    if not os.path.exists(filepath):
-        print(f"⚠️ File {filepath} không tồn tại.")
-        return
-
-    with open(filepath) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            os.environ[key.strip()] = value.strip()
-
-# Gọi khi import
-load_env()
-
-# Lấy giá trị của các biến môi trường
-# TRACKER_IP = "127.0.0.1"
-# TRACKER_HOST = os.getenv("TRACKER_HOST")
-# TRACKER_PORT = int(os.getenv("TRACKER_PORT"))
-# chunkdir = os.getenv("chunkdir")
-# NODE_DIR = os.getenv("NODE_DIR")
-# CHUNK_SIZE = os.getenv("CHUNK_SIZE")
-# DOWNLOAD_FOLDER = os.getenv("DOWNLOAD_FOLDER")
-# PEER_PORT = int(os.getenv("PEER_PORT"))
 TRACKER_HOST = "0.0.0.0"
 TRACKER_PORT = 6000
 
@@ -47,7 +21,6 @@ PEER_HOST = 6881
 MAX_CONNECTIONS = 10
 
 
-NODE_PORT = 7000            # Cổng lắng nghe của node
 PIECE_SIZE = 512 * 1024     # 512KB
 CHUNK_DIR = "chunks"
 NODE_DIR = "nodes"
@@ -270,7 +243,6 @@ class P2PGUI:
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể tìm danh sách peer: {e}")
             return []
-
     
     def find_available_port(self, port=PEER_PORT):
         """Tìm cổng trống"""
@@ -350,7 +322,7 @@ class P2PGUI:
                 s.connect((TRACKER_HOST, TRACKER_PORT))
                 message = json.dumps({"action": "FILE_AVAILABLE", "node": self.id, "metainfo": metainfo,"host":self.host, "port": self.port})
                 s.send(message.encode())
-                response = s.recv(1024).decode()
+                response = s.recv(16384).decode()
                 print("[TRACKER] Response:", response)
 
         except Exception as e:
@@ -423,20 +395,19 @@ class P2PGUI:
             print(f"[ERROR] Không tải được piece {piece_index} từ {host}:{port} - {e}")
             return None
 
-
     def download_file_from_peers(self):
         selected_index = self.download_listbox.curselection()
         if not selected_index:
-            messagebox("⚠️ Vui lòng chọn một file để tải.")
+            messagebox.showwarning("Thông báo", "⚠️ Vui lòng chọn một file để tải.")
             return
-        # Dòng đầu tiên có định dạng: "filename.ext - 12345 bytes - Pieces: 10"
+
         selected_line = self.download_listbox.get(selected_index[0]).strip()
         try:
             file_name = selected_line.split(" - ")[0]
         except IndexError:
             print("❌ Không thể xác định tên file từ dòng đã chọn.")
             return
-        # Lấy thông tin metainfo từ self.list_files
+
         file_info = dict(self.list_files).get(file_name)
         if not file_info:
             print("❌ Không tìm thấy thông tin file.")
@@ -445,15 +416,23 @@ class P2PGUI:
         num_pieces = file_info["num_pieces"]
         pieces_hash = file_info["pieces"]
         peers = file_info["peers"]
-
         downloaded_pieces = [None] * num_pieces
 
-        for i in range(num_pieces):
-            success = False
+        log_queue = queue.Queue()
+
+        def log(msg):
+            log_queue.put(msg)
+
+        def process_log_queue():
+            while not log_queue.empty():
+                self.download_listbox.insert(tk.END, log_queue.get())
+            self.download_listbox.after(100, process_log_queue)
+
+        def download_piece_thread(i):
             for peer in peers:
                 host = peer["host"]
                 port = peer["port"]
-                self.download_listbox.insert(tk.END, f"Tải piece {i} - {host}:{port}")
+                log(f"📥 Tải piece {i} - {host}:{port}")
                 data = self.download_piece_from_peer(host, port, file_name, i)
                 if data is None:
                     continue
@@ -461,29 +440,42 @@ class P2PGUI:
                 hash_val = self.sha1_hash(data)
                 if hash_val == pieces_hash[i]:
                     downloaded_pieces[i] = data
-                    self.download_listbox.insert(tk.END, f"✅ Piece {i} đã được xác thực và tải về.")
-                    success = True
-                    break
-                else:
-                    self.download_listbox.insert(tk.END, f"⚠️ Piece {i} sai hash - {host}:{port}")
-
-            if not success:
-                self.download_listbox.insert(tk.END, f"❌ Không thể tải piece {i} từ bất kỳ peer nào.")
-                return
-
-        # Gộp các mảnh lại và ghi ra file
-        os.makedirs(self.download_dir, exist_ok=True)
-        file_path = os.path.join(self.download_dir, file_name)
-        with open(file_path, "wb") as f:
-            for i, piece in enumerate(downloaded_pieces):
-                if piece:
-                    f.write(piece)
-                else:
-                    self.download_listbox.insert(tk.END, f"❌ Thiếu piece {i}, file không hoàn chỉnh.")
+                    log(f"✅ Piece {i} đã được xác thực từ {host}:{port}")
                     return
-        
-        self.download_listbox.insert(tk.END,f"🎉 Tải file {file_name} hoàn tất và lưu tại {file_path}")
+                else:
+                    log(f"⚠️ Piece {i} sai hash - {host}:{port}")
 
+            log(f"❌ Không thể tải piece {i} từ bất kỳ peer nào.")
+
+        # Bắt đầu tải
+        threads = []
+        for i in range(num_pieces):
+            t = threading.Thread(target=download_piece_thread, args=(i,))
+            t.start()
+            threads.append(t)
+
+        process_log_queue()  # Bắt đầu xử lý log từ queue
+
+        def wait_for_completion():
+            if any(t.is_alive() for t in threads):
+                self.download_listbox.after(200, wait_for_completion)
+            else:
+                # Khi tất cả thread đã xong
+                if None in downloaded_pieces:
+                    for i, piece in enumerate(downloaded_pieces):
+                        if piece is None:
+                            self.download_listbox.insert(tk.END, f"❌ Thiếu piece {i}, file không hoàn chỉnh.")
+                    return
+
+                os.makedirs(self.download_dir, exist_ok=True)
+                file_path = os.path.join(self.download_dir, file_name)
+                with open(file_path, "wb") as f:
+                    for piece in downloaded_pieces:
+                        f.write(piece)
+
+                self.download_listbox.insert(tk.END, f"🎉 Tải file {file_name} hoàn tất và lưu tại {file_path}")
+
+        wait_for_completion()
 
 # Khởi động giao diện
 if __name__ == "__main__":

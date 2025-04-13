@@ -25,9 +25,6 @@ def load_env(filepath=".env"):
 # Gọi khi import
 load_env()
 
-# Lấy giá trị của các biến môi trường
-# TRACKER_HOST = os.getenv("TRACKER_HOST")
-# TRACKER_PORT = int(os.getenv("TRACKER_PORT"))
 TRACKER_HOST = "0.0.0.0"
 TRACKER_PORT = 6000
 
@@ -96,7 +93,7 @@ def create_metainfo(metainfo):
 def handle_client(client_socket, addr, log_widget):
     global peers, file_registry
     try:
-        data = client_socket.recv(1024).decode().strip()
+        data = client_socket.recv(65536).decode().strip()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_widget.insert(tk.END, f"[{timestamp}] {addr}: {data}\n")  # Log nhận lệnh
         log_widget.yview(tk.END)  # Cuộn đến cuối
