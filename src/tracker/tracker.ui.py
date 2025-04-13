@@ -92,22 +92,7 @@ def create_metainfo(metainfo):
 
     print(f"✅ Metainfo file created: {metainfo_filename}")
     return metainfo_filename
-def get_matching_piece_indices(metainfo_path, pieces_input):
-    """
-    Đọc file metainfo.json và so sánh các pieces_input với pieces trong metainfo.
-    Trả về danh sách các index khớp.
-    """
-    with open(metainfo_path, 'r') as f:
-        metainfo = json.load(f)
 
-    metainfo_pieces = metainfo.get("pieces", [])
-    
-    matching_indices = [
-        idx for idx, piece_hash in enumerate(metainfo_pieces)
-        if piece_hash in pieces_input
-    ]
-
-    return matching_indices
 def handle_client(client_socket, addr, log_widget):
     global peers, file_registry
     try:
@@ -141,8 +126,7 @@ def handle_client(client_socket, addr, log_widget):
                 if filename not in file_registry or not isinstance(file_registry[filename], list):
                     log_widget.insert(tk.END, f"[WARNING] file_registry[{filename}] không hợp lệ, khởi tạo lại danh sách.\n")
                     file_registry[filename] = []
-                chunks = get_matching_piece_indices(metainfo_path, pieces)
-                file_registry[filename].append({"peer": peer_id, "host": host, "port": port, "chunks": chunks})
+                file_registry[filename].append({"peer": peer_id, "host": host, "port": port})
                 save_json(FILE_DATABASE, file_registry)
 
                 log_widget.insert(tk.END, f"[DEBUG] file_registry  cập nhật\n")
@@ -169,6 +153,7 @@ def handle_client(client_socket, addr, log_widget):
                                     "file_size": metainfo.get("file_size"),
                                     "piece_length": metainfo.get("piece_length"),
                                     "num_pieces": metainfo.get("num_pieces"),
+                                    "pieces": metainfo.get("pieces"),
                                     "tracker": metainfo.get("tracker")
                                 })
 
