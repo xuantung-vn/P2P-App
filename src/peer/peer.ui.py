@@ -8,7 +8,6 @@ from tkinter import ttk, messagebox, filedialog
 import socket
 import json
 
-
 def load_env(filepath=".env"):
     if not os.path.exists(filepath):
         print(f"⚠️ File {filepath} không tồn tại.")
@@ -49,7 +48,7 @@ MAX_CONNECTIONS = 10
 
 
 NODE_PORT = 7000            # Cổng lắng nghe của node
-CHUNK_SIZE = 512 * 1024     # 512KB
+PIECE_SIZE = 512 * 1024     # 512KB
 CHUNK_DIR = "chunks"
 NODE_DIR = "nodes"
 
@@ -67,6 +66,7 @@ class P2PGUI:
         self.share_tab = ttk.Frame(tab_control)
         self.dowload_tab = ttk.Frame(tab_control)
         self.peer_tab = ttk.Frame(tab_control)
+        self.list_files = {}
 
         tab_control.add(self.share_tab, text='Chia sẻ File')
         tab_control.add(self.dowload_tab, text='Tải file Online')
@@ -107,10 +107,11 @@ class P2PGUI:
 
     def create_donwload_tab(self):
         ttk.Label(self.dowload_tab, text="Tên File:").pack(pady=5)
-        self.filename_entry = ttk.Entry(self.dowload_tab, width=40)
-        self.filename_entry.pack()
+        self.keyword_entry = ttk.Entry(self.dowload_tab, width=40)
+        self.keyword_entry.pack()
 
         ttk.Button(self.dowload_tab, text="Tìm kiếm", command=self.search_file).pack(pady=10)
+        ttk.Button(self.dowload_tab, text="Tải file", command=self.download_file_from_peers).pack(pady=10)
 
         self.download_listbox = tk.Listbox(self.dowload_tab, width=50, height=100)
         self.download_listbox.pack(pady=10, fill='both', expand=True)
@@ -160,16 +161,15 @@ class P2PGUI:
                 command = data.split(" ")
 
                 if command[0] == "DOWNLOAD":
-                    filename, chunk = command[1], command[2]
+                    filename, piece_index = command[1], command[2]
+                    piece_index = int(piece_index)
                     file_path = os.path.join(f"{self.chunkdir}", f"{filename}_part{chunk}")
                     try:
                         with open(file_path, "rb") as f:
-                            while True:
-                                chunk_data = f.read(1024)
-                                if not chunk_data:
-                                    break
-                                conn.sendall(chunk_data)
-                        
+                            f.seek(piece_index * PIECE_SIZE)
+                            chunk = f.read(PIECE_SIZE)
+                            conn.sendall(chunk)
+                            print(f"✅ Gửi piece {piece_index} của {filename} cho {addr}")
                         # Gửi tín hiệu EOF để thông báo kết thúc
                         conn.sendall(b"EOF")
                         print(f"[INFO] Đã gửi phần {chunk} của {filename} tới {addr}")
@@ -203,6 +203,7 @@ class P2PGUI:
                 print("[TRACKER] Response:", response)
         except Exception as e:
             print(f"[ERROR] Could not register with tracker: {e}")
+            messagebox.showerror("Lỗi", f"Không kết nối được với tracker.")
     def refresh_peers(self):
         response = self.get_peers_from_tracker()
         self.peer_listbox.delete(0, tk.END)
@@ -211,6 +212,7 @@ class P2PGUI:
             for idx, peer_info in enumerate(response, start=1):
                 self.peer_listbox.insert(tk.END, f"{idx}. {peer_info}")
         else:
+            messagebox.showerror("Lỗi", f"Không có peers nào hoặc không kết nối được với tracker.")
             print("[INFO] Không có peers nào hoặc không kết nối được với tracker.")
             return
 
@@ -227,7 +229,7 @@ class P2PGUI:
                     return peers_list
                 return []
         except Exception as e:
-            print(f"[ERROR] Could not get peers from tracker: {e}")
+            messagebox.showerror("Lỗi", f"Không thể tìm danh sách peer")
             return []
     
     def find_available_port(self, port=PEER_PORT):
@@ -245,37 +247,31 @@ class P2PGUI:
         return hashlib.sha1(data).hexdigest()
 
     def split_and_hash_file(self, file_path, piece_length):
-        """Chia file thành các pieces và tính toán hash cho từng piece"""
+        """Chia file thành các mảnh và tính toán hash cho từng mảnh"""
         pieces = []
+        os.makedirs(self.chunk_dir, exist_ok=True)  # Tạo thư mục chunk nếu chưa có
+
         with open(file_path, 'rb') as f:
+            piece_index = 0  # Chỉ số mảnh
             while True:
+                # Đọc từng mảnh với kích thước piece_length
                 piece = f.read(piece_length)
                 if not piece:
                     break
-                pieces.append(self.sha1_hash(piece))  # Sử dụng self.sha1_hash
-        return pieces
 
-    def create_metainfo(self, file_path, tracker_url, piece_length=512 * 1024):
-        """Tạo metainfo cho file và lưu vào tệp JSON"""
-        file_name = os.path.basename(file_path)
-        file_size = os.path.getsize(file_path)
-        pieces = self.split_and_hash_file(file_path, piece_length)
+                # Tính toán hash cho mảnh và lưu mảnh vào thư mục chunk
+                piece_hash = self.sha1_hash(piece)
+                pieces.append(piece_hash)
 
-        metainfo = {
-            "file_name": file_name,
-            "file_size": file_size,
-            "piece_length": piece_length,
-            "num_pieces": len(pieces),
-            "pieces": pieces,
-            "tracker": tracker_url
-        }
+                # Lưu mảnh vào thư mục chunk
+                piece_filename = f"{piece_index}_{piece_hash}.chunk"
+                piece_path = os.path.join(self.chunk_dir, piece_filename)
+                with open(piece_path, 'wb') as piece_file:
+                    piece_file.write(piece)
 
-        metainfo_filename = file_name + ".metainfo.json"
-        with open(f"{NODE_DIR}/{self.id}/{CHUNK_DIR}/{metainfo_filename}", 'w') as out:
-            json.dump(metainfo, out, indent=4)
+                piece_index += 1  # Tăng chỉ số mảnh
 
-        print(f"✅ Metainfo file created: {metainfo_filename}")
-        return {"metainfo_filename":metainfo_filename, "pieces":pieces}
+        return pieces  # Trả về danh sách các hash của các mảnh
 
     def select_file(self):
         """Chọn file để chia sẻ"""
@@ -292,19 +288,27 @@ class P2PGUI:
             messagebox.showerror("Lỗi", "Vui lòng chọn file hợp lệ")
             return
 
-        # Tạo metainfo file
-        tracker_url = f"http://{TRACKER_HOST}:{TRACKER_PORT}/"
-        res = self.create_metainfo(filename, tracker_url)
-        self.notify_tracker(res["metainfo_filename"], res["pieces"])
+        file_name = os.path.basename(filename)
+        file_size = os.path.getsize(filename)
+
+        pieces = self.split_and_hash_file(filename, PIECE_SIZE)
+        metainfo = {
+            "file_name": file_name,
+            "file_size": file_size,
+            "piece_length": PIECE_SIZE,
+            "num_pieces": len(pieces),
+            "pieces": pieces
+        }
+        self.notify_tracker(metainfo)
 
         messagebox.showinfo("Phản hồi", "File đã được chia sẻ thành công!")
 
-    def notify_tracker(self, filename, num_chunks):
+    def notify_tracker(self, metainfo):
         """Thông báo tracker rằng node đang giữ file"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((TRACKER_HOST, TRACKER_PORT))
-                message = json.dumps({"action": "FILE_AVAILABLE", "node": self.id, "filename": filename, "chunks": num_chunks, "host":self.host, "port": self.port})
+                message = json.dumps({"action": "FILE_AVAILABLE", "node": self.id, "metainfo": metainfo,"host":self.host, "port": self.port})
                 s.send(message.encode())
                 response = s.recv(1024).decode()
                 print("[TRACKER] Response:", response)
@@ -313,7 +317,8 @@ class P2PGUI:
             print(f"[ERROR] Không thể thông báo tracker: {e}")
 
     def search_file(self):
-        keyword = self.filename_entry.get().strip()
+        keyword = self.keyword_entry.get().strip()
+        self.list_files = {}
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((TRACKER_HOST, TRACKER_PORT))
@@ -331,106 +336,82 @@ class P2PGUI:
                 result_text = ""
                 file_data = json.loads(response)
                 self.download_listbox.delete(0, tk.END)  # Xóa tất cả các mục trong listbox trước
-
+                self.list_files = file_data.items()
                 for file_name, peers in file_data.items():
                     result_text = f"{file_name}\n"  # Tiêu đề file
                     self.download_listbox.insert(tk.END, result_text)
                     for i, peer in enumerate(peers, start=1):
                         # Mỗi peer được hiển thị theo định dạng dễ đọc
-                        self.download_listbox.insert(tk.END, f"             #{i} Id: {peer['peer']} - IP: {peer['host']}:{peer['port']}")
-                        self.download_listbox.insert(tk.END, f"             ---------------------------------------- ")
+                        self.download_listbox.insert(tk.END, f"     #{i} Id: {peer['peer']} - IP: {peer['host']}:{peer['port']}")
+                        self.download_listbox.insert(tk.END, f"     ---------------------------------------- ")
         except Exception as e:
-            messagebox.showerror("Lỗi", f"Không thể tìm file")
+            messagebox.showerror("Lỗi", f"Không thể tìm file {e}")
    
-    def receive_chunk(self, conn, filename, chunk_number):
-        """Nhận và lưu chunk vào thư mục riêng của node"""
-        chunk_path = os.path.join(self.chunk_dir, f"{filename}.chunk{chunk_number}")
-        with open(chunk_path, "wb") as f:
+    def download_piece_from_peer(self, host, port, file_name, piece_index):
+        try:
+            s = socket.socket()
+            s.settimeout(5)
+            s.connect((host, port))
+
+            # Gửi yêu cầu dưới dạng: file_name|piece_index
+            s.send(f"{file_name}|{piece_index}".encode())
+
+            data = b""
             while True:
-                data = conn.recv(CHUNK_SIZE)
-                if not data:
+                chunk = s.recv(4096)
+                if not chunk:
                     break
-                f.write(data)
-        print(f"[RECEIVED] Đã lưu {filename} chunk {chunk_number} tại {self.chunk_dir}")
-        
-    def send_request(self, command):
-        """Gửi lệnh đến tracker và nhận phản hồi."""
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                client.connect((TRACKER_HOST, TRACKER_PORT))
-                client.send(command.encode())
-                response = client.recv(4096).decode()
-                print(f"[DEBUG] Phản hồi từ tracker: {response}")  # Thêm debug
-                return response
+                data += chunk
+            s.close()
+            return data
         except Exception as e:
-            print(f"[ERROR] Không thể gửi yêu cầu '{command}': {e}")
+            print(f"❌ Không tải được piece {piece_index} từ {host}:{port}: {e}")
             return None
-    def download_file(self, filename):
-        """Tải file từ các peer có sẵn."""
-        response = self.send_request(f"GET_FILE_SOURCES {filename}")
 
-        if response is None:
-            print(f"[ERROR] Không nhận được phản hồi từ tracker khi yêu cầu {filename}")
-            return
+    def download_file_from_peers(self):
+        self.list_files
+        metainfo_path = self.keyword_entry.get().strip()
+        peers = self.list_files
+        with open(metainfo_path, "r") as f:
+            meta = json.load(f)
 
-        try:
-            data = json.loads(response)
-            sources = data.get("sources", [])
-        except json.JSONDecodeError:
-            print(f"[ERROR] Phản hồi từ tracker không phải là JSON hợp lệ: {response}")
-            return
+        file_name = meta["file_name"]
+        piece_length = meta["piece_length"]
+        pieces_hash = meta["pieces"]
+        num_pieces = meta["num_pieces"]
 
-        if not sources:
-            print(f"[INFO] Không tìm thấy nguồn tải cho file {filename}")
-            return
+        downloaded_pieces = [None] * num_pieces
 
-        for source in sources:
-            peer, num_chunks = source["peer"], source["chunks"]
-            ip = source["host"]
-            port = source["port"]
-            print(f"[INFO] Đang tải {filename} từ {peer}")
+        for i in range(num_pieces):
+            success = False
+            for peer in peers:
+                data = self.download_piece_from_peer(peer["host"], peer["port"], file_name, i)
+                if data is None:
+                    continue
 
-            for chunk in range(num_chunks):
-                self.download_chunk(ip, int(port), filename, chunk)
-        self.merge_chunks(filename, num_chunks)
-    def download_chunk(self, ip, port, filename, chunk):
-        """Yêu cầu tải một phần file từ peer."""
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                client.connect((ip, port))
-                client.send(f"DOWNLOAD {filename} {chunk}".encode())
-
-                with open(f"{self.chunk_dir}/{filename}_part{chunk}", "wb") as f:
-                    while True:
-                        data = client.recv(1024)
-                        if not data:
-                            break
-                        f.write(data)
-            print(f"[INFO] Đã tải xong phần {chunk} của {filename}")
-        except Exception as e:
-            print(f"[ERROR] Lỗi tải {filename} phần {chunk}: {e}")
-
-    def merge_chunks(self, filename, num_chunks):
-        """Ghép các chunk thành file hoàn chỉnh"""
-        output_path = os.path.join(self.donwload_dir, filename)
-        with open(output_path, "wb") as output_file:
-            for chunk_number in range(num_chunks):
-                chunk_path = os.path.join(self.chunk_dir, f"{filename}_part{chunk_number}")
-                if os.path.exists(chunk_path):
-                    with open(chunk_path, "rb") as chunk_file:
-                        output_file.write(chunk_file.read())
-                    os.remove(chunk_path)  # Xóa chunk sau khi ghép thành công
+                hash_val = self.sha1_hash(data)
+                if hash_val == pieces_hash[i]:
+                    downloaded_pieces[i] = data
+                    print(f"✅ Piece {i} đã được xác thực và tải về.")
+                    success = True
+                    break
                 else:
-                    print(f"[ERROR] Thiếu chunk {chunk_number}, không thể ghép file {filename}")
+                    print(f"⚠️ Piece {i} sai hash từ {peer['host']}:{peer['port']}")
+
+            if not success:
+                print(f"❌ Không thể tải piece {i} từ bất kỳ peer nào.")
+                return
+
+        # Gộp các mảnh lại và ghi ra file
+        os.makedirs("downloads", exist_ok=True)
+        with open(f"{self.donwload_dir}/{file_name}", "wb") as f:
+            for i, piece in enumerate(downloaded_pieces):
+                if piece:
+                    f.write(piece)
+                else:
+                    print(f"❌ Thiếu piece {i}, file không hoàn chỉnh.")
                     return
-        print(f"[MERGE] Đã hoàn tất file {filename} tại {output_path}")
-   
-    def stop(self):
-        """Dừng node"""
-        response = self.send_request(f"LEAVE")
-        self.running = False
-        self.server.close()
-        print("[NODE] Shutting down")
+        print(f"🎉 Tải file {file_name} hoàn tất và lưu tại {self.donwload_dir}")
 
 # Khởi động giao diện
 if __name__ == "__main__":

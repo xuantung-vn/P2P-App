@@ -31,27 +31,14 @@ load_env()
 TRACKER_HOST = "0.0.0.0"
 TRACKER_PORT = 6000
 
-TRACKER_URL = "http://your-tracker-url.local"
 DOWNLOAD_DIRECTORY = "./downloads"
 TIMEOUT = 30
-
-PEER_PORT = 5000
-PEER_HOST = 6881
-MAX_CONNECTIONS = 10
-
 
 TRACKER_HOST = "127.0.0.1"  # IP của tracker
 NODE_PORT = 7000            # Cổng lắng nghe của node
 CHUNK_SIZE = 512 * 1024     # 512KB
-CHUNK_DIR = "chunks"
 NODE_DIR = "nodes"
-
-DOWNLOAD_FOLDER = "downloads"
-# CHUNK_DIR = os.getenv("CHUNK_DIR")
-# NODE_DIR = os.getenv("NODE_DIR")
-# CHUNK_SIZE = os.getenv("CHUNK_SIZE")
-# DOWNLOAD_FOLDER = os.getenv("DOWNLOAD_FOLDER")
-# PEER_PORT = int(os.getenv("PEER_PORT"))
+DATA = "./src/tracker/data"
 
 # # File lưu thông tin nodes và file chia sẻ
 PEERS_FILE = "./src/tracker/peers.json"
@@ -78,7 +65,6 @@ def save_json(file_path, data):
 
 # Danh sách các nodes và file chia sẻ (tải từ file nếu có)
 peers = load_json(PEERS_FILE)
-file_registry = load_json(FILE_DATABASE)
 # Hàm tính toán khoảng thời gian (minutes, hours, days)
 def format_time_diff(last_seen):
     now = time.time()  # Thời gian hiện tại
@@ -98,7 +84,30 @@ def format_time_diff(last_seen):
     else:
         # Trường hợp đã qua hơn 30 ngày
         return time.strftime('%Y-%m-%d', time.localtime(last_seen))
+def create_metainfo(metainfo):
+    """Tạo metainfo cho file và lưu vào tệp JSON"""
+    metainfo_filename = metainfo["file_name"] + ".metainfo.json"
+    with open(f"{DATA}/{metainfo_filename}", 'w') as out:
+        json.dump(metainfo, out, indent=4)
 
+    print(f"✅ Metainfo file created: {metainfo_filename}")
+    return metainfo_filename
+def get_matching_piece_indices(metainfo_path, pieces_input):
+    """
+    Đọc file metainfo.json và so sánh các pieces_input với pieces trong metainfo.
+    Trả về danh sách các index khớp.
+    """
+    with open(metainfo_path, 'r') as f:
+        metainfo = json.load(f)
+
+    metainfo_pieces = metainfo.get("pieces", [])
+    
+    matching_indices = [
+        idx for idx, piece_hash in enumerate(metainfo_pieces)
+        if piece_hash in pieces_input
+    ]
+
+    return matching_indices
 def handle_client(client_socket, addr, log_widget):
     global peers, file_registry
     try:
@@ -118,22 +127,28 @@ def handle_client(client_socket, addr, log_widget):
 
         if isinstance(command, dict):  # Xử lý JSON command
             if command["action"] == "FILE_AVAILABLE":
+
                 peer_id = command["node"]
-                filename = command["filename"]
                 host = command["host"]
                 port = command["port"]
-                num_chunks = command["chunks"]
 
+                metainfo = command["metainfo"]
+                filename = metainfo["file_name"]
+                pieces = metainfo["pieces"]
+                metainfo_path = f"{DATA}/{create_metainfo(metainfo)}"
+                file_registry = load_json(FILE_DATABASE)
+                
                 if filename not in file_registry or not isinstance(file_registry[filename], list):
                     log_widget.insert(tk.END, f"[WARNING] file_registry[{filename}] không hợp lệ, khởi tạo lại danh sách.\n")
                     file_registry[filename] = []
-
-                file_registry[filename].append({"peer": peer_id, "host": host, "port": port, "chunks": num_chunks})
+                chunks = get_matching_piece_indices(metainfo_path, pieces)
+                file_registry[filename].append({"peer": peer_id, "host": host, "port": port, "chunks": chunks})
                 save_json(FILE_DATABASE, file_registry)
 
-                log_widget.insert(tk.END, f"[DEBUG] file_registry sau cập nhật: {json.dumps(file_registry, indent=4)}\n")
+                log_widget.insert(tk.END, f"[DEBUG] file_registry  cập nhật\n")
                 log_widget.yview(tk.END)
                 client_socket.send(json.dumps({"status": "FILE_UPDATED", "filename": filename}).encode())
+
             if command['action'] == "SEARCH_FILE":
                 file_registry = load_json(FILE_DATABASE)
                 keyword = command.get("keyword", "").lower()
