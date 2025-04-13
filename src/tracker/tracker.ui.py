@@ -1,3 +1,4 @@
+from datetime import datetime
 import tkinter as tk
 from tkinter import scrolledtext
 import threading
@@ -25,16 +26,36 @@ def load_env(filepath=".env"):
 load_env()
 
 # Lấy giá trị của các biến môi trường
-TRACKER_HOST = os.getenv("TRACKER_HOST")
-TRACKER_PORT = int(os.getenv("TRACKER_PORT"))
-CHUNK_DIR = os.getenv("CHUNK_DIR")
-NODE_DIR = os.getenv("NODE_DIR")
-CHUNK_SIZE = os.getenv("CHUNK_SIZE")
-DOWNLOAD_FOLDER = os.getenv("DOWNLOAD_FOLDER")
-PEER_PORT = int(os.getenv("PEER_PORT"))
-# File lưu thông tin nodes và file chia sẻ
-PEERS_FILE = "tracker/peers.json"
-FILE_DATABASE = "tracker/file_registry.json"
+# TRACKER_HOST = os.getenv("TRACKER_HOST")
+# TRACKER_PORT = int(os.getenv("TRACKER_PORT"))
+TRACKER_HOST = "0.0.0.0"
+TRACKER_PORT = 6000
+
+TRACKER_URL = "http://your-tracker-url.local"
+DOWNLOAD_DIRECTORY = "./downloads"
+TIMEOUT = 30
+
+PEER_PORT = 5000
+PEER_HOST = 6881
+MAX_CONNECTIONS = 10
+
+
+TRACKER_HOST = "127.0.0.1"  # IP của tracker
+NODE_PORT = 7000            # Cổng lắng nghe của node
+CHUNK_SIZE = 512 * 1024     # 512KB
+CHUNK_DIR = "chunks"
+NODE_DIR = "nodes"
+
+DOWNLOAD_FOLDER = "downloads"
+# CHUNK_DIR = os.getenv("CHUNK_DIR")
+# NODE_DIR = os.getenv("NODE_DIR")
+# CHUNK_SIZE = os.getenv("CHUNK_SIZE")
+# DOWNLOAD_FOLDER = os.getenv("DOWNLOAD_FOLDER")
+# PEER_PORT = int(os.getenv("PEER_PORT"))
+
+# # File lưu thông tin nodes và file chia sẻ
+PEERS_FILE = "./src/tracker/peers.json"
+FILE_DATABASE = "./src/tracker/files.json"
 
 # Đọc dữ liệu từ file JSON (nếu có)
 def load_json(file_path):
@@ -51,18 +72,39 @@ def save_json(file_path, data):
     try:
         with open(file_path, "w") as f:
             json.dump(data, f, indent=4)
+        print(f"[💾 SAVED] Dữ liệu đã được lưu vào {file_path}")
     except Exception as e:
-        print(f"[ERROR] Không thể lưu {file_path}: {e}")
+        print(f"[❌ ERROR] Không thể lưu {file_path}: {e}")
 
 # Danh sách các nodes và file chia sẻ (tải từ file nếu có)
 peers = load_json(PEERS_FILE)
 file_registry = load_json(FILE_DATABASE)
+# Hàm tính toán khoảng thời gian (minutes, hours, days)
+def format_time_diff(last_seen):
+    now = time.time()  # Thời gian hiện tại
+    diff = now - last_seen  # Khoảng cách thời gian
+    # Tính số phút, giờ, ngày
+    if diff < 60:
+        return f"{int(diff)} giây trước"
+    elif diff < 3600:
+        minutes = int(diff // 60)
+        return f"{minutes} phút trước"
+    elif diff < 86400:
+        hours = int(diff // 3600)
+        return f"{hours} giờ trước"
+    elif diff < 2592000:  # 30 ngày
+        days = int(diff // 86400)
+        return f"{days} ngày trước"
+    else:
+        # Trường hợp đã qua hơn 30 ngày
+        return time.strftime('%Y-%m-%d', time.localtime(last_seen))
 
 def handle_client(client_socket, addr, log_widget):
     global peers, file_registry
     try:
         data = client_socket.recv(1024).decode().strip()
-        log_widget.insert(tk.END, f"[DEBUG] {addr}: {data}\n")  # Log nhận lệnh
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_widget.insert(tk.END, f"[{timestamp}] {addr}: {data}\n")  # Log nhận lệnh
         log_widget.yview(tk.END)  # Cuộn đến cuối
 
         if not data:
@@ -113,8 +155,22 @@ def handle_client(client_socket, addr, log_widget):
                 log_widget.yview(tk.END)
                 client_socket.send("LEFT".encode())
             elif command[0] == "GET_PEERS":
-                active_peers = [peer for peer, info in peers.items() if info["status"] == "connected"]
+                active_peers = []
+                # Tạo danh sách peers chi tiết
+                for peer, info in peers.items():
+                    # Lấy thông tin chi tiết về peer
+                    ip, port = peer.split(":")
+                    status = info["status"]
+                    # last_seen = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(info["last_seen"]))
+                    last_seen = format_time_diff(info["last_seen"])  # Tính toán và định dạng thời gian
+
+                    # Thêm thông tin về peer vào danh sách
+                    peer_info = f"Host: {ip} - Port: {port} - Status: {status} - Last Seen: {last_seen}"
+                    active_peers.append(peer_info)
+                
+                # Nếu có peer, trả về danh sách, nếu không trả về "NO_PEERS"
                 peers_list = ",".join(active_peers) if active_peers else "NO_PEERS"
+                # Gửi danh sách peers về client
                 client_socket.send(f"PEERS {peers_list}".encode())
             if command[0] == "GET_FILE_SOURCES":
                 filename = command[1]
@@ -134,9 +190,10 @@ def handle_client(client_socket, addr, log_widget):
 
 def start_tracker(log_widget):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind(("0.0.0.0", 6000))
+    server.bind((TRACKER_HOST, TRACKER_PORT))
     server.listen(5)
-    log_widget.insert(tk.END, "[TRACKER] Server is running on port 6000...\n")
+
+    log_widget.insert(tk.END, "[TRACKER] Server is running on port {TRACKER_PORT}...\n")
     log_widget.yview(tk.END)
 
     while True:
