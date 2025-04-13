@@ -2,13 +2,38 @@ import socket
 import threading
 import hashlib
 import random
-import config
 import json
 import os
+def load_env(filepath=".env"):
+    if not os.path.exists(filepath):
+        print(f"⚠️ File {filepath} không tồn tại.")
+        return
+
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ[key.strip()] = value.strip()
+
+# Gọi khi import
+load_env()
+
+# Lấy giá trị của các biến môi trường
+TRACKER_HOST = os.getenv("TRACKER_HOST")
+TRACKER_PORT = int(os.getenv("TRACKER_PORT"))
+CHUNK_DIR = os.getenv("CHUNK_DIR")
+NODE_DIR = os.getenv("NODE_DIR")
+CHUNK_SIZE = os.getenv("CHUNK_SIZE")
+DOWNLOAD_FOLDER = os.getenv("DOWNLOAD_FOLDER")
+PEER_PORT = int(os.getenv("PEER_PORT"))
 
 
 class Node:
-    def __init__(self, host="0.0.0.0", port=5000):
+    def __init__(self, host="0.0.0.0", port=PEER_PORT):
         self.host = host
         self.port = self.find_available_port(port)
         self.id = self.generate_id()
@@ -16,13 +41,13 @@ class Node:
         self.running = True
         
         # Tạo thư mục riêng cho node
-        self.config.NODE_DIR = os.path.join(config.NODE_DIR, self.id)
-        self.config.CHUNK_DIR = f"{self.config.NODE_DIR}/{config.CHUNK_DIR}"
-        self.donwload_dir = f"{self.config.NODE_DIR}/{config.DOWNLOAD_FOLDER}"
-        if not os.path.exists(self.config.NODE_DIR):
-            os.makedirs(self.config.NODE_DIR)
+        self.node_dir = os.path.join(NODE_DIR, self.id)
+        self.chunk_dir = f"{self.node_dir}/{CHUNK_DIR}"
+        self.donwload_dir = f"{self.node_dir}/{DOWNLOAD_FOLDER}"
+        if not os.path.exists(self.node_dir):
+            os.makedirs(self.node_dir)
             os.makedirs(self.donwload_dir)
-            os.makedirs(self.config.CHUNK_DIR)
+            os.makedirs(self.chunk_dir)
 
         # Tạo socket server
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -97,24 +122,13 @@ class Node:
             print(f"[NODE] Connected to {peer_host}:{peer_port}")
             return conn
         except Exception as e:
-            # print(f"[ERROR] Could not connect to peer {peer_host}:{peer_port} - {e}")
             return None
-
-    def send_message(self, peer_host, peer_port, message):
-        """Gửi tin nhắn đến một peer"""
-        conn = self.connect_to_peer(peer_host, peer_port)
-        if conn:
-            try:
-                conn.sendall(message.encode())
-                conn.close()
-            except Exception as e:
-                print(f"[ERROR] {e}")
 
     def register_with_tracker(self):
         """Gửi thông tin node đến tracker"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((config.TRACKER_HOST, config.TRACKER_PORT))
+                s.connect((TRACKER_HOST, TRACKER_PORT))
                 s.send(f"REGISTER {self.host} {self.port}".encode())
                 response = s.recv(1024).decode()
                 print("[TRACKER] Response:", response)
@@ -125,7 +139,7 @@ class Node:
         """Lấy danh sách các nodes từ tracker"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((config.TRACKER_HOST, config.TRACKER_PORT))
+                s.connect((TRACKER_HOST, TRACKER_PORT))
                 s.send("GET_PEERS".encode())
                 response = s.recv(1024).decode()
                 print("[TRACKER] Danh sách nodes:", response)
@@ -139,16 +153,17 @@ class Node:
         except Exception as e:
             print(f"[ERROR] Could not get peers from tracker: {e}")
     
-    def find_available_port(self, port=5000):
+    def find_available_port(self, port=PEER_PORT):
         """Tìm cổng trống"""
         while not self.is_port_available(port):
-            port = random.randint(5000, 5010)
+            port = random.randint(PEER_PORT, 9999)
         return port
 
     def is_port_available(self, port):
         """Kiểm tra cổng có trống không"""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex((self.host, port)) != 0
+    
     def upload_file(self, filename):
         """Lưu file thành các chunk và thông báo tracker"""
         if not os.path.exists(filename):
@@ -160,11 +175,11 @@ class Node:
         with open(filename, "rb") as f:
             chunk_number = 0
             while True:
-                chunk = f.read(config.CHUNK_SIZE)
+                chunk = f.read(CHUNK_SIZE)
                 if not chunk:
                     break
                 chunk_filename = f"{file_basename}.chunk{chunk_number}"  # Tạo tên file chunk
-                chunk_path = os.path.join(self.config.CHUNK_DIR, chunk_filename)  # Lưu vào thư mục của node
+                chunk_path = os.path.join(self.chunk_dir, chunk_filename)  # Lưu vào thư mục của node
                 with open(chunk_path, "wb") as chunk_file:
                     chunk_file.write(chunk)
                 chunks.append(chunk_filename)
@@ -179,7 +194,7 @@ class Node:
         """Thông báo tracker rằng node đang giữ file"""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.connect((config.TRACKER_HOST, config.TRACKER_PORT))
+                s.connect((TRACKER_HOST, TRACKER_PORT))
                 message = json.dumps({"action": "FILE_AVAILABLE", "node": self.id, "filename": filename, "chunks": num_chunks, "host":self.host, "port": self.port})
                 s.send(message.encode())
                 response = s.recv(1024).decode()
@@ -203,20 +218,20 @@ class Node:
                 print(f"[ERROR] Không thể thông báo {peer}: {e}")
     def receive_chunk(self, conn, filename, chunk_number):
         """Nhận và lưu chunk vào thư mục riêng của node"""
-        chunk_path = os.path.join(self.config.CHUNK_DIR, f"{filename}.chunk{chunk_number}")
+        chunk_path = os.path.join(self.chunk_dir, f"{filename}.chunk{chunk_number}")
         with open(chunk_path, "wb") as f:
             while True:
-                data = conn.recv(config.CHUNK_SIZE)
+                data = conn.recv(CHUNK_SIZE)
                 if not data:
                     break
                 f.write(data)
-        print(f"[RECEIVED] Đã lưu {filename} chunk {chunk_number} tại {self.config.CHUNK_DIR}")
+        print(f"[RECEIVED] Đã lưu {filename} chunk {chunk_number} tại {self.chunk_dir}")
         
     def send_request(self, command):
         """Gửi lệnh đến tracker và nhận phản hồi."""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                client.connect((config.TRACKER_HOST, config.TRACKER_PORT))
+                client.connect((TRACKER_HOST, TRACKER_PORT))
                 client.send(command.encode())
                 response = client.recv(4096).decode()
                 print(f"[DEBUG] Phản hồi từ tracker: {response}")  # Thêm debug
@@ -259,7 +274,7 @@ class Node:
                 client.connect((ip, port))
                 client.send(f"DOWNLOAD {filename} {chunk}".encode())
 
-                with open(f"{self.config.CHUNK_DIR}/{filename}_part{chunk}", "wb") as f:
+                with open(f"{self.chunk_dir}/{filename}_part{chunk}", "wb") as f:
                     while True:
                         data = client.recv(1024)
                         if not data:
@@ -274,7 +289,7 @@ class Node:
         output_path = os.path.join(self.donwload_dir, filename)
         with open(output_path, "wb") as output_file:
             for chunk_number in range(num_chunks):
-                chunk_path = os.path.join(self.config.CHUNK_DIR, f"{filename}_part{chunk_number}")
+                chunk_path = os.path.join(self.chunk_dir, f"{filename}_part{chunk_number}")
                 if os.path.exists(chunk_path):
                     with open(chunk_path, "rb") as chunk_file:
                         output_file.write(chunk_file.read())
@@ -300,15 +315,6 @@ if __name__ == "__main__":
         elif cmd.startswith("u "):
             parts = cmd.split(" ")
             node.upload_file(parts[1])
-        elif cmd.startswith("s "):
-            parts = cmd.split(" ")
-            if len(parts) < 4:
-                print("[ERROR] Cú pháp: send <peer_host> <peer_port> <message>")
-            else:
-                peer_host = parts[1]
-                peer_port = parts[2]
-                message = " ".join(parts[3:])
-                node.send_message(peer_host, peer_port, message)
         elif cmd.startswith("d "):
             parts = cmd.split(" ")
             filename = parts[1]
