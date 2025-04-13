@@ -134,7 +134,17 @@ def handle_client(client_socket, addr, log_widget):
                 log_widget.insert(tk.END, f"[DEBUG] file_registry sau cập nhật: {json.dumps(file_registry, indent=4)}\n")
                 log_widget.yview(tk.END)
                 client_socket.send(json.dumps({"status": "FILE_UPDATED", "filename": filename}).encode())
-
+            if command['action'] == "SEARCH_FILE":
+                file_registry = load_json(FILE_DATABASE)
+                keyword = command.get("keyword", "").lower()
+                result = {}
+                for file_name, peers in file_registry.items():
+                    if keyword in file_name.lower() or keyword == "":
+                        result[file_name] = peers
+                if result:
+                    client_socket.send(json.dumps(result).encode())
+                else:
+                    client_socket.send(json.dumps(result).encode())
         elif isinstance(command, list):  # Xử lý text-based command
             if command[0] == "REGISTER":
                 ip, port = command[1], command[2]
@@ -144,39 +154,22 @@ def handle_client(client_socket, addr, log_widget):
                 log_widget.insert(tk.END, f"[INFO] REGISTERED {peer_id}\n")
                 log_widget.yview(tk.END)
                 client_socket.send(f"REGISTERED {peer_id}".encode())
-            elif command[0] == "LEAVE":
-                ip, port = command[1], command[2]
-                peer_id = f"{ip}:{port}"
-                if peer_id in peers:
-                    peers[peer_id]["status"] = "disconnected"
-                    peers[peer_id]["last_seen"] = time.time()
-                    save_json(PEERS_FILE, peers)
-                log_widget.insert(tk.END, f"[INFO] LEFT {peer_id}\n")
-                log_widget.yview(tk.END)
-                client_socket.send("LEFT".encode())
             elif command[0] == "GET_PEERS":
                 active_peers = []
+                peers = load_json(PEERS_FILE)
                 # Tạo danh sách peers chi tiết
                 for peer, info in peers.items():
                     # Lấy thông tin chi tiết về peer
                     ip, port = peer.split(":")
                     status = info["status"]
-                    # last_seen = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(info["last_seen"]))
-                    last_seen = format_time_diff(info["last_seen"])  # Tính toán và định dạng thời gian
+                    last_seen = format_time_diff(info["last_seen"])
 
                     # Thêm thông tin về peer vào danh sách
                     peer_info = f"Host: {ip} - Port: {port} - Status: {status} - Last Seen: {last_seen}"
                     active_peers.append(peer_info)
                 
-                # Nếu có peer, trả về danh sách, nếu không trả về "NO_PEERS"
                 peers_list = ",".join(active_peers) if active_peers else "NO_PEERS"
-                # Gửi danh sách peers về client
                 client_socket.send(f"PEERS {peers_list}".encode())
-            if command[0] == "GET_FILE_SOURCES":
-                filename = command[1]
-                sources = file_registry.get(filename, [])
-                response = json.dumps({"sources": sources})  
-                client_socket.send(response.encode())
         else:
             log_widget.insert(tk.END, f"[ERROR] Không xác định được loại lệnh: {command}\n")
             log_widget.yview(tk.END)
@@ -190,6 +183,8 @@ def handle_client(client_socket, addr, log_widget):
 
 def start_tracker(log_widget):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((TRACKER_HOST, TRACKER_PORT))
     server.listen(5)
 

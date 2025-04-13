@@ -112,8 +112,8 @@ class P2PGUI:
 
         ttk.Button(self.dowload_tab, text="Tìm kiếm", command=self.search_file).pack(pady=10)
 
-        self.peer_listbox = tk.Listbox(self.dowload_tab, width=50)
-        self.peer_listbox.pack(pady=10, fill='both', expand=True)
+        self.download_listbox = tk.Listbox(self.dowload_tab, width=50, height=100)
+        self.download_listbox.pack(pady=10, fill='both', expand=True)
 
     def create_share_tab(self):
         ttk.Label(self.share_tab, text="Tên File:").pack(pady=5)
@@ -275,7 +275,7 @@ class P2PGUI:
             json.dump(metainfo, out, indent=4)
 
         print(f"✅ Metainfo file created: {metainfo_filename}")
-        return metainfo_filename
+        return {"metainfo_filename":metainfo_filename, "pieces":pieces}
 
     def select_file(self):
         """Chọn file để chia sẻ"""
@@ -294,21 +294,11 @@ class P2PGUI:
 
         # Tạo metainfo file
         tracker_url = f"http://{TRACKER_HOST}:{TRACKER_PORT}/"
-        metainfo_filename = self.create_metainfo(filename, tracker_url)
-        chunk_number = 0
-        response = self.notify_tracker(metainfo_filename, chunk_number)
+        res = self.create_metainfo(filename, tracker_url)
+        self.notify_tracker(res["metainfo_filename"], res["pieces"])
 
         messagebox.showinfo("Phản hồi", "File đã được chia sẻ thành công!")
 
-    def search_file(self):
-        filename = self.filename_entry.get()
-        if not filename:
-            messagebox.showerror("Lỗi", "Vui lòng nhập tên file hợp lệ")
-            return
-
-        response = self.download_file(filename)
-        messagebox.showinfo("Phản hồi", response)
-        
     def notify_tracker(self, filename, num_chunks):
         """Thông báo tracker rằng node đang giữ file"""
         try:
@@ -322,6 +312,36 @@ class P2PGUI:
         except Exception as e:
             print(f"[ERROR] Không thể thông báo tracker: {e}")
 
+    def search_file(self):
+        keyword = self.filename_entry.get().strip()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.connect((TRACKER_HOST, TRACKER_PORT))
+                
+                # Gửi yêu cầu tìm kiếm
+                message = json.dumps({
+                    "action": "SEARCH_FILE",
+                    "node": self.id,
+                    "keyword": keyword,  # dùng từ "keyword" thay vì "filename"
+                    "host": self.host,
+                    "port": self.port
+                })
+                s.send(message.encode())
+                response = s.recv(4096).decode()  # tăng buffer size để nhận nhiều file
+                result_text = ""
+                file_data = json.loads(response)
+                self.download_listbox.delete(0, tk.END)  # Xóa tất cả các mục trong listbox trước
+
+                for file_name, peers in file_data.items():
+                    result_text = f"{file_name}\n"  # Tiêu đề file
+                    self.download_listbox.insert(tk.END, result_text)
+                    for i, peer in enumerate(peers, start=1):
+                        # Mỗi peer được hiển thị theo định dạng dễ đọc
+                        self.download_listbox.insert(tk.END, f"             #{i} Id: {peer['peer']} - IP: {peer['host']}:{peer['port']}")
+                        self.download_listbox.insert(tk.END, f"             ---------------------------------------- ")
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể tìm file")
+   
     def receive_chunk(self, conn, filename, chunk_number):
         """Nhận và lưu chunk vào thư mục riêng của node"""
         chunk_path = os.path.join(self.chunk_dir, f"{filename}.chunk{chunk_number}")
