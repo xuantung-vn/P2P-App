@@ -6,8 +6,6 @@ import time
 import json
 import os
 
-from tracker import *
-
 def load_env(filepath=".env"):
     if not os.path.exists(filepath):
         print(f"⚠️ File {filepath} không tồn tại.")
