@@ -40,13 +40,9 @@ class Node:
         self.server.listen(5)
 
         print(f"[NODE] Running on {self.host}:{self.port} with ID {self.id}")
-
+        
         # Đăng ký với tracker
         self.register_with_tracker()
-
-        # Lấy danh sách nodes từ tracker
-        # self.get_peers_from_tracker()
-
         # Bắt đầu luồng lắng nghe kết nối
         threading.Thread(target=self.listen_for_peers, daemon=True).start()
     
