@@ -8,6 +8,7 @@ from tkinter import ttk, messagebox, filedialog
 import socket
 import json
 
+
 def load_env(filepath=".env"):
     if not os.path.exists(filepath):
         print(f"⚠️ File {filepath} không tồn tại.")
@@ -47,7 +48,6 @@ PEER_HOST = 6881
 MAX_CONNECTIONS = 10
 
 
-TRACKER_HOST = "127.0.0.1"  # IP của tracker
 NODE_PORT = 7000            # Cổng lắng nghe của node
 CHUNK_SIZE = 512 * 1024     # 512KB
 CHUNK_DIR = "chunks"
@@ -132,48 +132,6 @@ class P2PGUI:
         self.peer_listbox = tk.Listbox(self.peer_tab, width=50)
         self.peer_listbox.pack(pady=10, fill='both', expand=True)
 
-    def select_file(self):
-        filename = filedialog.askopenfilename(title="Chọn file để chia sẻ", filetypes=(("All Files", "*.*"),))
-        if filename:
-            self.filename_entry.delete(0, tk.END)  # Xóa entry cũ
-            self.filename_entry.insert(0, filename)  # Đặt đường dẫn tệp vào entry
-
-    def share_file(self):
-        filename = self.filename_entry.get()
-
-        if not filename:
-            messagebox.showerror("Lỗi", "Vui lòng chọn file hợp lệ")
-            return
-
-        response = self.upload_file(filename)
-        messagebox.showinfo("Phản hồi", response)
-        if "Error" in response:
-            messagebox.showerror("Lỗi", response)
-        else:
-            messagebox.showinfo("Phản hồi", response)
-
-    def search_file(self):
-        filename = self.filename_entry.get()
-        if not filename:
-            messagebox.showerror("Lỗi", "Vui lòng nhập tên file hợp lệ")
-            return
-
-        response = self.download_file(filename)
-        messagebox.showinfo("Phản hồi", response)
-
-    def refresh_peers(self):
-        response = self.get_peers_from_tracker()
-        self.peer_listbox.delete(0, tk.END)
-
-        if "PEERS" in response:
-            parts = response.split(" ", 1)
-            if len(parts) == 2 and parts[1] != "NO_PEERS":
-                for peer in parts[1].split(","):
-                    self.peer_listbox.insert(tk.END, peer)
-            else:
-                self.peer_listbox.insert(tk.END, "Không có node nào online.")
-        else:
-            self.peer_listbox.insert(tk.END, "Lỗi khi lấy danh sách node.")
     def generate_id(self):
         """Tạo ID ngắn gọn cho node"""
         hash_obj = hashlib.sha256()
@@ -282,32 +240,74 @@ class P2PGUI:
         """Kiểm tra cổng có trống không"""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex((self.host, port)) != 0
-    
-    def upload_file(self, filename):
-        """Lưu file thành các chunk và thông báo tracker"""
-        if not os.path.exists(filename):
-            print(f"[ERROR] File {filename} không tồn tại.")
-            return
-        
-        file_basename = os.path.basename(filename)  # Lấy tên file, bỏ đường dẫn
-        chunks = []
-        with open(filename, "rb") as f:
-            chunk_number = 0
+    def sha1_hash(self, data):
+        """Tính toán SHA-1 hash cho dữ liệu"""
+        return hashlib.sha1(data).hexdigest()
+
+    def split_and_hash_file(self, file_path, piece_length):
+        """Chia file thành các pieces và tính toán hash cho từng piece"""
+        pieces = []
+        with open(file_path, 'rb') as f:
             while True:
-                chunk = f.read(CHUNK_SIZE)
-                if not chunk:
+                piece = f.read(piece_length)
+                if not piece:
                     break
-                chunk_filename = f"{file_basename}.chunk{chunk_number}"  # Tạo tên file chunk
-                chunk_path = os.path.join(self.chunk_dir, chunk_filename)  # Lưu vào thư mục của node
-                with open(chunk_path, "wb") as chunk_file:
-                    chunk_file.write(chunk)
-                chunks.append(chunk_filename)
-                print(f"[UPLOAD] Đã lưu chunk {chunk_number} tại {chunk_path}")
-                chunk_number += 1
-        
-        # Thông báo tracker rằng node này giữ file
-        self.notify_tracker(file_basename, chunk_number)
-        self.notify_peers(file_basename, chunk_number)
+                pieces.append(self.sha1_hash(piece))  # Sử dụng self.sha1_hash
+        return pieces
+
+    def create_metainfo(self, file_path, tracker_url, piece_length=512 * 1024):
+        """Tạo metainfo cho file và lưu vào tệp JSON"""
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+        pieces = self.split_and_hash_file(file_path, piece_length)
+
+        metainfo = {
+            "file_name": file_name,
+            "file_size": file_size,
+            "piece_length": piece_length,
+            "num_pieces": len(pieces),
+            "pieces": pieces,
+            "tracker": tracker_url
+        }
+
+        metainfo_filename = file_name + ".metainfo.json"
+        with open(f"{NODE_DIR}/{self.id}/{CHUNK_DIR}/{metainfo_filename}", 'w') as out:
+            json.dump(metainfo, out, indent=4)
+
+        print(f"✅ Metainfo file created: {metainfo_filename}")
+        return metainfo_filename
+
+    def select_file(self):
+        """Chọn file để chia sẻ"""
+        filename = filedialog.askopenfilename(title="Chọn file để chia sẻ", filetypes=(("All Files", "*.*"),))
+        if filename:
+            self.filename_entry.delete(0, tk.END)
+            self.filename_entry.insert(0, filename)
+
+    def share_file(self):
+        """Chia sẻ file lên tracker"""
+        filename = self.filename_entry.get()
+
+        if not filename:
+            messagebox.showerror("Lỗi", "Vui lòng chọn file hợp lệ")
+            return
+
+        # Tạo metainfo file
+        tracker_url = f"http://{TRACKER_HOST}:{TRACKER_PORT}/"
+        metainfo_filename = self.create_metainfo(filename, tracker_url)
+        chunk_number = 0
+        response = self.notify_tracker(metainfo_filename, chunk_number)
+
+        messagebox.showinfo("Phản hồi", "File đã được chia sẻ thành công!")
+
+    def search_file(self):
+        filename = self.filename_entry.get()
+        if not filename:
+            messagebox.showerror("Lỗi", "Vui lòng nhập tên file hợp lệ")
+            return
+
+        response = self.download_file(filename)
+        messagebox.showinfo("Phản hồi", response)
         
     def notify_tracker(self, filename, num_chunks):
         """Thông báo tracker rằng node đang giữ file"""
@@ -321,20 +321,7 @@ class P2PGUI:
 
         except Exception as e:
             print(f"[ERROR] Không thể thông báo tracker: {e}")
-    def notify_peers(self, filename, num_chunks):
-        """Gửi thông báo cho các peer rằng file đã được tải lên"""
-        for peer in self.peers:
-            try:
-                peer_host, peer_port = peer  # Lấy host và port từ tuple
-                peer_port = int(peer_port)  # Chuyển port thành số nguyên
 
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.connect((peer_host, peer_port))
-                    message = f"NEW_FILE {filename} {num_chunks}"
-                    s.send(message.encode())
-                    print(f"[PEER] Đã thông báo {peer} về file {filename}")
-            except Exception as e:
-                print(f"[ERROR] Không thể thông báo {peer}: {e}")
     def receive_chunk(self, conn, filename, chunk_number):
         """Nhận và lưu chunk vào thư mục riêng của node"""
         chunk_path = os.path.join(self.chunk_dir, f"{filename}.chunk{chunk_number}")
