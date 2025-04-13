@@ -88,10 +88,10 @@ class P2PGUI:
         # Tạo thư mục riêng cho node
         self.node_dir = os.path.join(NODE_DIR, self.id)
         self.chunkdir = f"{self.node_dir}/{CHUNK_DIR}"
-        self.donwload_dir = f"{self.node_dir}/{DOWNLOAD_FOLDER}"
+        self.download_dir = f"{self.node_dir}/{DOWNLOAD_FOLDER}"
         if not os.path.exists(self.node_dir):
             os.makedirs(self.node_dir)
-            os.makedirs(self.donwload_dir)
+            os.makedirs(self.download_dir)
             os.makedirs(self.chunkdir)
 
         # Tạo socket server
@@ -409,7 +409,6 @@ class P2PGUI:
             while True:
                 chunk = s.recv(4096)
                 if b"EOF" in chunk:
-                    # Loại bỏ phần "EOF" nếu có dính vào chunk
                     chunk = chunk.replace(b"EOF", b"")
                     data += chunk
                     break
@@ -454,8 +453,7 @@ class P2PGUI:
             for peer in peers:
                 host = peer["host"]
                 port = peer["port"]
-
-                print(f"📥 Thử tải piece {i} từ {host}:{port}")
+                self.download_listbox.insert(tk.END, f"Tải piece {i} - {host}:{port}")
                 data = self.download_piece_from_peer(host, port, file_name, i)
                 if data is None:
                     continue
@@ -463,28 +461,28 @@ class P2PGUI:
                 hash_val = self.sha1_hash(data)
                 if hash_val == pieces_hash[i]:
                     downloaded_pieces[i] = data
-                    print(f"✅ Piece {i} đã được xác thực và tải về.")
+                    self.download_listbox.insert(tk.END, f"✅ Piece {i} đã được xác thực và tải về.")
                     success = True
                     break
                 else:
-                    print(f"⚠️ Piece {i} sai hash từ {host}:{port}")
+                    self.download_listbox.insert(tk.END, f"⚠️ Piece {i} sai hash - {host}:{port}")
 
             if not success:
-                print(f"❌ Không thể tải piece {i} từ bất kỳ peer nào.")
+                self.download_listbox.insert(tk.END, f"❌ Không thể tải piece {i} từ bất kỳ peer nào.")
                 return
 
         # Gộp các mảnh lại và ghi ra file
-        os.makedirs(self.donwload_dir, exist_ok=True)
-        file_path = os.path.join(self.donwload_dir, file_name)
+        os.makedirs(self.download_dir, exist_ok=True)
+        file_path = os.path.join(self.download_dir, file_name)
         with open(file_path, "wb") as f:
             for i, piece in enumerate(downloaded_pieces):
                 if piece:
                     f.write(piece)
                 else:
-                    print(f"❌ Thiếu piece {i}, file không hoàn chỉnh.")
+                    self.download_listbox.insert(tk.END, f"❌ Thiếu piece {i}, file không hoàn chỉnh.")
                     return
-
-        print(f"🎉 Tải file {file_name} hoàn tất và lưu tại {file_path}")
+        
+        self.download_listbox.insert(tk.END,f"🎉 Tải file {file_name} hoàn tất và lưu tại {file_path}")
 
 
 # Khởi động giao diện
