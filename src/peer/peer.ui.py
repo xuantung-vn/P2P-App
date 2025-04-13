@@ -70,7 +70,7 @@ class P2PGUI:
 
         tab_control.add(self.share_tab, text='Chia sẻ File')
         tab_control.add(self.dowload_tab, text='Tải file Online')
-        tab_control.add(self.peer_tab, text='Danh sách các Node khác')
+        tab_control.add(self.peer_tab, text='Các Peer khác')
 
         tab_control.pack(expand=1, fill='both')
 
@@ -198,17 +198,21 @@ class P2PGUI:
             conn.close()
             print(f"[DISCONNECTED] {addr}")
 
-
     def connect_to_peer(self, peer_host, peer_port):
-        """Kết nối với một node khác"""
+        """Kết nối với một node khác và kiểm tra xem peer có online không"""
         try:
             conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            conn.settimeout(5)
             conn.connect((peer_host, int(peer_port)))
+
             self.peers.add((peer_host, peer_port))
-            print(f"[NODE] Connected to {peer_host}:{peer_port}")
-            return conn
-        except Exception as e:
-            return None
+            print(f"[NODE] Kết nối thành công với {peer_host}:{peer_port}")
+            conn.close()
+            return True
+        except (socket.timeout, socket.error) as e:
+            print(f"[ERROR] Không thể kết nối đến {peer_host}:{peer_port}. Lỗi: {e}")
+            return False 
+
 
     def register_with_tracker(self):
         """Gửi thông tin node đến tracker"""
@@ -238,16 +242,35 @@ class P2PGUI:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((TRACKER_HOST, TRACKER_PORT))
                 s.send("GET_PEERS".encode())
-                response = s.recv(1024).decode()
-                
-                if response.startswith("PEERS "):
-                    # Xử lý danh sách peer từ tracker
-                    peers_list = response[6:].split(",")
+
+                response = s.recv(8192).decode()
+                data = json.loads(response)
+
+                if data.get("type") == "PEERS":
+                    peers_data = data.get("data", [])
+                    peers_list = []
+
+                    for peer in peers_data:
+                        ip = peer.get("ip")
+                        port = int(peer.get("port"))
+                        last_seen = peer.get("last_seen", "N/A")
+
+                        # Kiểm tra kết nối
+                        conn = self.connect_to_peer(ip, port)
+                        status = "🟢 Online" if conn else "🔴 Offline"
+
+                        # Chuỗi hiển thị
+                        peer_info = f"Host: {ip} - Port: {port} - Status: {status} - Last Seen: {last_seen}"
+                        peers_list.append(peer_info)
+
                     return peers_list
-                return []
+                else:
+                    return []
+
         except Exception as e:
-            messagebox.showerror("Lỗi", f"Không thể tìm danh sách peer")
+            messagebox.showerror("Lỗi", f"Không thể tìm danh sách peer: {e}")
             return []
+
     
     def find_available_port(self, port=PEER_PORT):
         """Tìm cổng trống"""

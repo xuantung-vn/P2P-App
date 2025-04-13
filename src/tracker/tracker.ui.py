@@ -172,19 +172,19 @@ def handle_client(client_socket, addr, log_widget):
             elif command[0] == "GET_PEERS":
                 active_peers = []
                 peers = load_json(PEERS_FILE)
-                # Tạo danh sách peers chi tiết
-                for peer, info in peers.items():
-                    # Lấy thông tin chi tiết về peer
-                    ip, port = peer.split(":")
-                    status = info["status"]
-                    last_seen = format_time_diff(info["last_seen"])
 
-                    # Thêm thông tin về peer vào danh sách
-                    peer_info = f"Host: {ip} - Port: {port} - Status: {status} - Last Seen: {last_seen}"
+                for peer, info in peers.items():
+                    ip, port = peer.split(":")
+                    last_seen = format_time_diff(info["last_seen"])
+                    peer_info = {
+                        "ip": ip,
+                        "port": port,
+                        "last_seen": last_seen
+                    }
                     active_peers.append(peer_info)
-                
-                peers_list = ",".join(active_peers) if active_peers else "NO_PEERS"
-                client_socket.send(f"PEERS {peers_list}".encode())
+
+                message = json.dumps({"type": "PEERS", "data": active_peers})
+                client_socket.send(message.encode())
         else:
             log_widget.insert(tk.END, f"[ERROR] Không xác định được loại lệnh: {command}\n")
             log_widget.yview(tk.END)
