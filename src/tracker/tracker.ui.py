@@ -153,13 +153,28 @@ def handle_client(client_socket, addr, log_widget):
                 file_registry = load_json(FILE_DATABASE)
                 keyword = command.get("keyword", "").lower()
                 result = {}
+
                 for file_name, peers in file_registry.items():
                     if keyword in file_name.lower() or keyword == "":
-                        result[file_name] = peers
-                if result:
-                    client_socket.send(json.dumps(result).encode())
-                else:
-                    client_socket.send(json.dumps(result).encode())
+                        metainfo_path = os.path.join(f"{DATA}", f"{file_name}.metainfo.json")
+                        file_info = {
+                            "peers": peers
+                        }
+
+                        # Nếu có metainfo thì thêm thông tin vào
+                        if os.path.exists(metainfo_path):
+                            with open(metainfo_path, "r") as meta_file:
+                                metainfo = json.load(meta_file)
+                                file_info.update({
+                                    "file_size": metainfo.get("file_size"),
+                                    "piece_length": metainfo.get("piece_length"),
+                                    "num_pieces": metainfo.get("num_pieces"),
+                                    "tracker": metainfo.get("tracker")
+                                })
+
+                        result[file_name] = file_info
+
+                client_socket.send(json.dumps(result).encode())
         elif isinstance(command, list):  # Xử lý text-based command
             if command[0] == "REGISTER":
                 ip, port = command[1], command[2]

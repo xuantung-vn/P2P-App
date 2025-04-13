@@ -332,18 +332,30 @@ class P2PGUI:
                     "port": self.port
                 })
                 s.send(message.encode())
-                response = s.recv(4096).decode()  # tăng buffer size để nhận nhiều file
-                result_text = ""
-                file_data = json.loads(response)
+                response = s.recv(8192).decode()  # tăng buffer size nếu dữ liệu nhiều
                 self.download_listbox.delete(0, tk.END)  # Xóa tất cả các mục trong listbox trước
+
+                file_data = json.loads(response)
                 self.list_files = file_data.items()
-                for file_name, peers in file_data.items():
-                    result_text = f"{file_name}\n"  # Tiêu đề file
+
+                for file_name, file_info in file_data.items():
+                    # Thông tin cơ bản về file
+                    result_text = (
+                        f"{file_name}\n"
+                        f"     Size: {file_info.get('file_size', 'N/A')} bytes\n"
+                        f"     Pieces: {file_info.get('num_pieces', 'N/A')}\n"
+                    )
                     self.download_listbox.insert(tk.END, result_text)
+
+                    # Thông tin các peer
+                    peers = file_info.get("peers", [])
                     for i, peer in enumerate(peers, start=1):
-                        # Mỗi peer được hiển thị theo định dạng dễ đọc
-                        self.download_listbox.insert(tk.END, f"     #{i} Id: {peer['peer']} - IP: {peer['host']}:{peer['port']}")
+                        self.download_listbox.insert(
+                            tk.END,
+                            f"     #{i} 🧑‍💻 Id: {peer.get('peer', 'unknown')} - IP: {peer.get('host')}:{peer.get('port')}"
+                        )
                         self.download_listbox.insert(tk.END, f"     ---------------------------------------- ")
+
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể tìm file {e}")
    
