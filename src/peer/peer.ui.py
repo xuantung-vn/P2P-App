@@ -192,7 +192,7 @@ class P2PGUI:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((TRACKER_HOST, TRACKER_PORT))
-                s.send(f"REGISTER {self.host} {self.port}".encode())
+                s.send(f"REGISTER {self.host} {self.port} {self.id}".encode())
                 response = s.recv(1024).decode()
                 print("[TRACKER] Response:", response)
         except Exception as e:
@@ -407,7 +407,7 @@ class P2PGUI:
         except IndexError:
             print("❌ Không thể xác định tên file từ dòng đã chọn.")
             return
-
+        
         file_info = dict(self.list_files).get(file_name)
         if not file_info:
             print("❌ Không tìm thấy thông tin file.")
@@ -440,6 +440,11 @@ class P2PGUI:
                 hash_val = self.sha1_hash(data)
                 if hash_val == pieces_hash[i]:
                     downloaded_pieces[i] = data
+                    piece_filename = f"{i}_{file_name}.chunk"
+                    piece_path = os.path.join(self.chunkdir, piece_filename)
+                    with open(piece_path, 'wb') as piece_file:
+                        piece_file.write(data)
+                    
                     log(f"✅ Piece {i} đã được xác thực từ {host}:{port}")
                     return
                 else:
@@ -474,7 +479,16 @@ class P2PGUI:
                         f.write(piece)
 
                 self.download_listbox.insert(tk.END, f"🎉 Tải file {file_name} hoàn tất và lưu tại {file_path}")
-                self.notify_tracker(file_info)
+                
+                metainfo = {
+                    "file_name": file_name,
+                    "file_size": file_info["file_size"],
+                    "piece_length": PIECE_SIZE,
+                    "num_pieces": len(downloaded_pieces),
+                    "pieces": []
+                }
+                self.notify_tracker(metainfo)
+
 
         wait_for_completion()
 

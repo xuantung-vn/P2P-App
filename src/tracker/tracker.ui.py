@@ -119,7 +119,6 @@ def handle_client(client_socket, addr, log_widget):
                 pieces = metainfo["pieces"]
                 metainfo_path = f"{DATA}/{create_metainfo(metainfo)}"
                 file_registry = load_json(FILE_DATABASE)
-                
                 if filename not in file_registry or not isinstance(file_registry[filename], list):
                     log_widget.insert(tk.END, f"[WARNING] file_registry[{filename}] không hợp lệ, khởi tạo lại danh sách.\n")
                     file_registry[filename] = []
@@ -159,9 +158,9 @@ def handle_client(client_socket, addr, log_widget):
                 client_socket.send(json.dumps(result).encode())
         elif isinstance(command, list):  # Xử lý text-based command
             if command[0] == "REGISTER":
-                ip, port = command[1], command[2]
+                ip, port, id = command[1], command[2], command[3]
                 peer_id = f"{ip}:{port}"
-                peers[peer_id] = {"ip": ip, "port": port, "status": "connected", "last_seen": time.time()}
+                peers[peer_id] = {"ip": ip,"id": id, "port": port, "status": "connected", "last_seen": time.time()}
                 save_json(PEERS_FILE, peers)
                 log_widget.insert(tk.END, f"[INFO] REGISTERED {peer_id}\n")
                 log_widget.yview(tk.END)
@@ -200,7 +199,7 @@ def start_tracker(log_widget):
     server.bind((TRACKER_HOST, TRACKER_PORT))
     server.listen(5)
 
-    log_widget.insert(tk.END, "[TRACKER] Server is running on port {TRACKER_PORT}...\n")
+    log_widget.insert(tk.END, f"[TRACKER] Server is running on port {TRACKER_PORT}...\n")
     log_widget.yview(tk.END)
 
     while True:
