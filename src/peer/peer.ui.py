@@ -447,7 +447,7 @@ class P2PGUI:
 
             log(f"❌ Không thể tải piece {i} từ bất kỳ peer nào.")
 
-        # Bắt đầu tải
+        # Bắt đầu tải - mỗi pieces tương đương với 1 thread
         threads = []
         for i in range(num_pieces):
             t = threading.Thread(target=download_piece_thread, args=(i,))
@@ -474,6 +474,7 @@ class P2PGUI:
                         f.write(piece)
 
                 self.download_listbox.insert(tk.END, f"🎉 Tải file {file_name} hoàn tất và lưu tại {file_path}")
+                self.notify_tracker(file_info)
 
         wait_for_completion()
 
